@@ -12,18 +12,14 @@
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 20px; }
         h2 { margin: 0; }
         .action-btns { display: flex; gap: 10px; }
-        
         .upload-btn { background-color: #4299e1; color: white; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px; }
         .upload-btn:hover { background-color: #3182ce; }
         .clear-btn { background-color: #f56565; color: white; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; border: none; font-size: 14px; }
         .clear-btn:hover { background-color: #c53030; }
         input[type="file"] { display: none; }
-
         .tabs { display: flex; gap: 5px; margin-bottom: 20px; border-bottom: 2px solid #edf2f7; padding-bottom: 1px; }
         .tab-btn { padding: 10px 20px; cursor: pointer; border: none; background-color: #edf2f7; border-radius: 5px 5px 0 0; font-weight: bold; color: #4a5568; transition: 0.3s; }
-        .tab-btn:hover { background-color: #e2e8f0; }
         .tab-btn.active { background-color: #4299e1; color: white; }
-
         #mainChart { width: 100%; height: 500px; margin-bottom: 30px; display: none; }
         .table-container { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }
@@ -60,18 +56,20 @@
 </div>
 
 <script>
-    let masterData = JSON.parse(localStorage.getItem('aso_master_data')) || []; 
-    let dateColumns = JSON.parse(localStorage.getItem('aso_date_columns')) || [];
+    // 增加默认空值保护，防止第一次打开报错
+    let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]'); 
+    let dateColumns = JSON.parse(localStorage.getItem('aso_date_columns') || '[]');
     let currentApp = null; 
     let myChart = null; 
 
-    // 【新增的核心】：页面加载时，检查是否带有自动导入的数据
     window.onload = function() {
-        if (masterData.length > 0) {
+        // 1. 先尝试读取本地硬盘数据
+        if (masterData && masterData.length > 0) {
             updateTabs();
             renderAppView();
         }
 
+        // 2. 检查网址里的空投数据
         const params = new URLSearchParams(window.location.search);
         const autoApp = params.get('app');
         const autoDate = params.get('date');
@@ -79,59 +77,31 @@
 
         if (autoApp && autoDate && encodedData) {
             try {
-                // 解码插件传过来的数据
                 const jsonStr = decodeURIComponent(atob(encodedData));
                 const parsedData = JSON.parse(jsonStr);
 
-                // 转换成我们网站认识的格式
                 let newData = parsedData.map(item => ({
-                    "抓取日期 (Date)": autoDate + " 12:00", 
+                    "抓取日期 (Date)": autoDate, 
                     "App名称 (App)": autoApp,
                     "关键词 (Keyword)": item.k,
                     "当日排名 (Rank)": item.r,
                     "7日排名变化": item.c
                 }));
 
-                // 悄悄把网址上的后缀删掉，保持干净
+                // 清理地址栏
                 window.history.replaceState({}, document.title, window.location.pathname);
-
-                // 执行合并
                 mergeAndRender(newData);
-                alert(`🎉 太棒了！已自动接收并保存 [${autoApp}] 的最新排名数据！`);
-
+                alert(`🎉 成功接收并保存 [${autoApp}] 数据！`);
             } catch (e) {
-                alert("❌ 自动导入数据失败: " + e.message);
+                alert("❌ 导入数据失败: " + e.message);
             }
         }
     };
 
-    // 手动上传 Excel 的备用逻辑
-    document.getElementById('excelFile').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            try {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
-                const sheetName = workbook.SheetNames[0];
-                const newJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: false }); 
-                mergeAndRender(newJsonData);
-            } catch (error) {
-                alert("❌ 解析出错: " + error.message);
-            }
-        };
-        reader.readAsArrayBuffer(file);
-        e.target.value = ''; 
-    });
-
-    // 核心的数据合并逻辑
     function mergeAndRender(newData) {
-        if (newData.length === 0) return;
+        if (!newData || newData.length === 0) return;
 
-        let rawDate = newData[0]["抓取日期 (Date)"] || "未知日期";
-        let shortDate = String(rawDate).split(' ')[0]; 
+        let shortDate = newData[0]["抓取日期 (Date)"];
         let rankColName = `${shortDate} 排名`;
         let uploadedApp = newData[0]["App名称 (App)"];
 
@@ -170,7 +140,6 @@
         renderAppView();
     }
 
-    // 渲染标签页
     function updateTabs() {
         const tabsContainer = document.getElementById('appTabs');
         tabsContainer.innerHTML = '';
@@ -182,16 +151,11 @@
             const btn = document.createElement('button');
             btn.className = `tab-btn ${app === currentApp ? 'active' : ''}`;
             btn.textContent = app;
-            btn.onclick = () => {
-                currentApp = app;
-                updateTabs(); 
-                renderAppView(); 
-            };
+            btn.onclick = () => { currentApp = app; updateTabs(); renderAppView(); };
             tabsContainer.appendChild(btn);
         });
     }
 
-    // 渲染页面数据
     function renderAppView() {
         document.getElementById('emptyState').style.display = 'none';
         const currentAppData = masterData.filter(row => row["App名称 (App)"] === currentApp);
@@ -199,7 +163,6 @@
         renderMainChart(currentAppData);
     }
 
-    // 渲染表格
     function renderTable(appData) {
         const displayColumns = ["App名称 (App)", "关键词 (Keyword)", ...dateColumns, "7日排名变化"];
         const thead = document.getElementById('tableHead');
@@ -207,11 +170,7 @@
         
         thead.innerHTML = '';
         const headerRow = document.createElement('tr');
-        displayColumns.forEach(col => {
-            const th = document.createElement('th');
-            th.textContent = col;
-            headerRow.appendChild(th);
-        });
+        displayColumns.forEach(col => { const th = document.createElement('th'); th.textContent = col; headerRow.appendChild(th); });
         thead.appendChild(headerRow);
 
         tbody.innerHTML = ''; 
@@ -220,14 +179,10 @@
             displayColumns.forEach(col => {
                 const td = document.createElement('td');
                 let cellValue = row[col] !== undefined && row[col] !== "" ? row[col] : '-';
-                
-                if (col === "7日排名变化" && cellValue !== '-' && cellValue !== 0 && cellValue !== "0") {
+                if (col === "7日排名变化" && cellValue !== '-') {
                     let strVal = String(cellValue).trim();
-                    if (strVal.includes('↑') || parseFloat(strVal) > 0) {
-                        td.classList.add('trend-up');
-                    } else if (strVal.includes('↓') || parseFloat(strVal) < 0) {
-                        td.classList.add('trend-down');
-                    }
+                    if (strVal.includes('↑') || parseFloat(strVal) > 0) td.classList.add('trend-up');
+                    else if (strVal.includes('↓') || parseFloat(strVal) < 0) td.classList.add('trend-down');
                 }
                 td.textContent = cellValue;
                 tr.appendChild(td);
@@ -236,61 +191,37 @@
         });
     }
 
-    // 渲染大图表
     function renderMainChart(appData) {
         const chartDom = document.getElementById('mainChart');
         if (dateColumns.length > 0) { chartDom.style.display = 'block'; } 
         else { chartDom.style.display = 'none'; return; }
-
         if (!myChart) myChart = echarts.init(chartDom);
         myChart.clear();
 
         const xAxisData = dateColumns.map(col => col.replace(' 排名', ''));
         const legendData = appData.map(row => row['关键词 (Keyword)']);
+        const seriesData = appData.map(row => ({
+            name: row['关键词 (Keyword)'],
+            type: 'line',
+            data: dateColumns.map(col => (row[col] && row[col] !== '-') ? parseInt(row[col]) : null)
+        }));
 
-        const seriesData = appData.map(row => {
-            return {
-                name: row['关键词 (Keyword)'],
-                type: 'line',
-                smooth: false,
-                connectNulls: true,
-                symbolSize: 6,
-                data: dateColumns.map(col => {
-                    let val = row[col];
-                    return (val && val !== '-') ? parseInt(val) : null;
-                })
-            };
-        });
-
-        const option = {
+        myChart.setOption({
             title: { text: `[${currentApp}] 关键词排名动态走势`, left: 'center' },
-            tooltip: { trigger: 'axis', axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } } },
+            tooltip: { trigger: 'axis' },
             legend: { type: 'scroll', bottom: 0, data: legendData },
-            grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
-            xAxis: [ { type: 'category', boundaryGap: false, data: xAxisData } ],
-            yAxis: [ { type: 'value', inverse: true, min: 1, name: '排名' } ],
+            xAxis: { type: 'category', data: xAxisData },
+            yAxis: { type: 'value', inverse: true },
             series: seriesData
-        };
-
-        myChart.setOption(option);
+        });
     }
 
-    // 清空缓存
     function clearData() {
-        if(confirm("警告：确定要清空所有已保存的数据吗？清空后将无法恢复！")) {
-            localStorage.removeItem('aso_master_data');
-            localStorage.removeItem('aso_date_columns');
-            masterData = []; dateColumns = []; currentApp = null;
-            document.getElementById('tableHead').innerHTML = '';
-            document.getElementById('tableBody').innerHTML = '';
-            document.getElementById('appTabs').innerHTML = '';
-            document.getElementById('mainChart').style.display = 'none';
-            document.getElementById('emptyState').style.display = 'block';
-            if (myChart) myChart.clear();
+        if(confirm("警告：确定要清空所有数据吗？")) {
+            localStorage.clear();
+            location.reload();
         }
     }
-
-    window.addEventListener('resize', () => { if(myChart) myChart.resize(); });
 </script>
 </body>
 </html>
