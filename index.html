@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASO 排名动态追踪看板</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333;}
+        .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 20px 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 20px; }
+        h2 { margin: 0; }
+        .action-btns { display: flex; gap: 10px; }
+        
+        .upload-btn { background-color: #4299e1; color: white; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px; }
+        .upload-btn:hover { background-color: #3182ce; }
+        .clear-btn { background-color: #f56565; color: white; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; border: none; font-size: 14px; }
+        .clear-btn:hover { background-color: #c53030; }
+        input[type="file"] { display: none; }
+
+        /* 标签页样式 */
+        .tabs { display: flex; gap: 5px; margin-bottom: 20px; border-bottom: 2px solid #edf2f7; padding-bottom: 1px; }
+        .tab-btn { padding: 10px 20px; cursor: pointer; border: none; background-color: #edf2f7; border-radius: 5px 5px 0 0; font-weight: bold; color: #4a5568; transition: 0.3s; }
+        .tab-btn:hover { background-color: #e2e8f0; }
+        .tab-btn.active { background-color: #4299e1; color: white; }
+
+        #mainChart { width: 100%; height: 500px; margin-bottom: 30px; display: none; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }
+        th, td { border: 1px solid #e2e8f0; padding: 12px 15px; text-align: left; }
+        th { background-color: #edf2f7; font-weight: 600; }
+        tr:hover { background-color: #f7fafc; }
+        .trend-up { color: #48bb78; font-weight: bold; }
+        .trend-down { color: #f56565; font-weight: bold; }
+        .empty-state { text-align: center; color: #a0aec0; padding: 50px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h2>📈 ASO 排名追踪看板</h2>
+        <div class="action-btns">
+            <label for="excelFile" class="upload-btn">➕ 导入新数据 (Excel)</label>
+            <input type="file" id="excelFile" accept=".xlsx, .xls, .csv">
+            <button class="clear-btn" onclick="clearData()">🗑️ 清空所有缓存</button>
+        </div>
+    </div>
+
+    <!-- App 切换标签页容器 -->
+    <div class="tabs" id="appTabs"></div>
+
+    <!-- 全局大图表容器 -->
+    <div id="mainChart"></div>
+
+    <div class="table-container">
+        <table id="dashboardTable">
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty-state">暂无数据，请点击右上角导入 Excel 文件。</div>
+    </div>
+</div>
+
+<script>
+    // 【核心机制：从本地存储读取历史数据】
+    let masterData = JSON.parse(localStorage.getItem('aso_master_data')) || []; 
+    let dateColumns = JSON.parse(localStorage.getItem('aso_date_columns')) || [];
+    let currentApp = null; // 当前正在查看的 App
+    let myChart = null; 
+
+    // 初始化页面
+    window.onload = function() {
+        if (masterData.length > 0) {
+            updateTabs();
+            renderAppView();
+        }
+    };
+
+    // 监听文件上传
+    document.getElementById('excelFile').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const sheetName = workbook.SheetNames[0];
+                const newJsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: false }); 
+                mergeAndRender(newJsonData);
+            } catch (error) {
+                alert("❌ 解析出错: " + error.message);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+        e.target.value = ''; // 清空 input 方便再次上传
+    });
+
+    function mergeAndRender(newData) {
+        if (newData.length === 0) return;
+
+        let rawDate = newData[0]["抓取日期 (Date)"] || "未知日期";
+        let shortDate = String(rawDate).split(' ')[0]; 
+        let rankColName = `${shortDate} 排名`;
+        
+        // 记录刚刚上传的这个表属于哪个 App，以便上传后自动跳转过去
+        let uploadedApp = newData[0]["App名称 (App)"];
+
+        if (!dateColumns.includes(rankColName)) {
+            dateColumns.push(rankColName);
+            // 每次有新日期列，都对所有历史日期重新排序 (简单按字母/时间字符串排序)
+            dateColumns.sort(); 
+        }
+
+        newData.forEach(newRow => {
+            const app = newRow["App名称 (App)"];
+            const keyword = newRow["关键词 (Keyword)"];
+            const rank = newRow["当日排名 (Rank)"];
+            const change = newRow["7日排名变化"];
+
+            let existingRow = masterData.find(r => r["App名称 (App)"] === app && r["关键词 (Keyword)"] === keyword);
+
+            if (existingRow) {
+                existingRow[rankColName] = rank;
+                existingRow["7日排名变化"] = change;
+            } else {
+                let obj = {
+                    "App名称 (App)": app,
+                    "关键词 (Keyword)": keyword,
+                    [rankColName]: rank,
+                    "7日排名变化": change
+                };
+                masterData.push(obj);
+            }
+        });
+
+        // 【保存到本地缓存】
+        localStorage.setItem('aso_master_data', JSON.stringify(masterData));
+        localStorage.setItem('aso_date_columns', JSON.stringify(dateColumns));
+
+        // 更新标签页，并跳转到刚刚上传的 App 页面
+        currentApp = uploadedApp;
+        updateTabs();
+        renderAppView();
+    }
+
+    // 生成 App 切换标签
+    function updateTabs() {
+        const tabsContainer = document.getElementById('appTabs');
+        tabsContainer.innerHTML = '';
+        
+        // 提取所有不重复的 App 名称
+        const apps = [...new Set(masterData.map(row => row["App名称 (App)"]))];
+        
+        if (apps.length === 0) return;
+        
+        // 如果当前没有选中的 App，默认选中第一个
+        if (!currentApp || !apps.includes(currentApp)) {
+            currentApp = apps[0];
+        }
+
+        apps.forEach(app => {
+            const btn = document.createElement('button');
+            btn.className = `tab-btn ${app === currentApp ? 'active' : ''}`;
+            btn.textContent = app;
+            btn.onclick = () => {
+                currentApp = app;
+                updateTabs(); // 更新激活样式
+                renderAppView(); // 重新渲染页面内容
+            };
+            tabsContainer.appendChild(btn);
+        });
+    }
+
+    // 渲染当前选中的 App 的数据
+    function renderAppView() {
+        document.getElementById('emptyState').style.display = 'none';
+        
+        // 【核心过滤】：只挑出当前属于 currentApp 的数据！
+        const currentAppData = masterData.filter(row => row["App名称 (App)"] === currentApp);
+        
+        renderTable(currentAppData);
+        renderMainChart(currentAppData);
+    }
+
+    // 渲染表格
+    function renderTable(appData) {
+        const displayColumns = ["App名称 (App)", "关键词 (Keyword)", ...dateColumns, "7日排名变化"];
+        const thead = document.getElementById('tableHead');
+        const tbody = document.getElementById('tableBody');
+        
+        thead.innerHTML = '';
+        const headerRow = document.createElement('tr');
+        displayColumns.forEach(col => {
+            const th = document.createElement('th');
+            th.textContent = col;
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+
+        tbody.innerHTML = ''; 
+        appData.forEach(row => {
+            const tr = document.createElement('tr');
+            displayColumns.forEach(col => {
+                const td = document.createElement('td');
+                let cellValue = row[col] !== undefined && row[col] !== "" ? row[col] : '-';
+                
+                if (col === "7日排名变化" && cellValue !== '-' && cellValue !== 0 && cellValue !== "0") {
+                    let strVal = String(cellValue).trim();
+                    if (strVal.includes('↑') || parseFloat(strVal) > 0) {
+                        td.classList.add('trend-up');
+                    } else if (strVal.includes('↓') || parseFloat(strVal) < 0) {
+                        td.classList.add('trend-down');
+                    }
+                }
+                td.textContent = cellValue;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+    // 渲染折线图
+    function renderMainChart(appData) {
+        const chartDom = document.getElementById('mainChart');
+        if (dateColumns.length > 0) {
+            chartDom.style.display = 'block';
+        } else {
+            chartDom.style.display = 'none';
+            return;
+        }
+
+        if (!myChart) myChart = echarts.init(chartDom);
+
+        // 如果换了 App，需要清空之前的画布避免数据残留
+        myChart.clear();
+
+        const xAxisData = dateColumns.map(col => col.replace(' 排名', ''));
+        const legendData = appData.map(row => row['关键词 (Keyword)']);
+
+        const seriesData = appData.map(row => {
+            return {
+                name: row['关键词 (Keyword)'],
+                type: 'line',
+                smooth: false,
+                connectNulls: true,
+                symbolSize: 6,
+                data: dateColumns.map(col => {
+                    let val = row[col];
+                    return (val && val !== '-') ? parseInt(val) : null;
+                })
+            };
+        });
+
+        const option = {
+            title: { text: `[${currentApp}] 关键词排名动态走势`, left: 'center' },
+            tooltip: { trigger: 'axis', axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } } },
+            legend: { type: 'scroll', bottom: 0, data: legendData },
+            grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+            xAxis: [ { type: 'category', boundaryGap: false, data: xAxisData } ],
+            yAxis: [ { type: 'value', inverse: true, min: 1, name: '排名' } ],
+            series: seriesData
+        };
+
+        myChart.setOption(option);
+    }
+
+    // 清空缓存功能
+    function clearData() {
+        if(confirm("警告：确定要清空所有已保存的数据吗？清空后将无法恢复！")) {
+            localStorage.removeItem('aso_master_data');
+            localStorage.removeItem('aso_date_columns');
+            masterData = [];
+            dateColumns = [];
+            currentApp = null;
+            document.getElementById('tableHead').innerHTML = '';
+            document.getElementById('tableBody').innerHTML = '';
+            document.getElementById('appTabs').innerHTML = '';
+            document.getElementById('mainChart').style.display = 'none';
+            document.getElementById('emptyState').style.display = 'block';
+            if (myChart) myChart.clear();
+        }
+    }
+
+    window.addEventListener('resize', () => { if(myChart) myChart.resize(); });
+</script>
+</body>
+</html>
