@@ -1,30 +1,73 @@
-<!-- index.html - 完整核心脚本部分 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>ASO 动态监控看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
+        .control-panel { background: #fff; padding: 15px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 20px; }
+        .tab-btn { padding: 8px 16px; cursor: pointer; border: 1px solid #cbd5e0; background: #edf2f7; margin-right: 5px; }
+        .tab-btn.active { background: #4299e1; color: white; }
+        #filterList { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; }
+        th, td { border: 1px solid #e2e8f0; padding: 8px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h2>📈 ASO 动态监控看板</h2>
+
+    <div class="control-panel">
+        <button onclick="deleteCurrentApp()" style="background:#feb2b2; border:none; padding:8px; cursor:pointer;">🗑️ 删除当前 App</button>
+        <button onclick="resetDashboard()" style="background:#fbd38d; border:none; padding:8px; cursor:pointer;">⚠️ 清空所有数据</button>
+        <div id="filterList"></div>
+    </div>
+
+    <div id="appTabs"></div>
+    <div id="chartContainer" style="width: 100%; height: 350px;"></div>
+    <table id="dataTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+
 <script>
     let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
     let currentApp = localStorage.getItem('last_selected_app') || "";
     let activeKeys = JSON.parse(localStorage.getItem('active_keys') || '[]');
 
     function renderTable() {
+        const headEl = document.getElementById('tableHead');
+        const bodyEl = document.getElementById('tableBody');
+        const filterEl = document.getElementById('filterList');
+        
+        // 防御性判断：如果页面元素还没加载，直接退出
+        if (!headEl || !bodyEl || !filterEl) return;
+
         const appData = masterData.filter(d => d.App === currentApp);
         const allKeys = [...new Set(appData.map(d => d.Keyword))];
         
-        // 1. 渲染筛选框
-        document.getElementById('filterList').innerHTML = allKeys.map(k => 
-            `<label style="margin-right:10px;"><input type="checkbox" ${activeKeys.includes(k) ? 'checked' : ''} onchange="toggleKey('${k}')"> ${k}</label>`
+        // 渲染筛选框
+        filterEl.innerHTML = allKeys.map(k => 
+            `<label style="margin-right:10px; cursor:pointer;"><input type="checkbox" ${activeKeys.includes(k) ? 'checked' : ''} onchange="toggleKey('${k}')"> ${k}</label>`
         ).join('');
 
-        // 2. 过滤数据
-        const filteredData = appData.filter(d => activeKeys.includes(d.Keyword));
-        if (filteredData.length === 0) return;
+        // 过滤数据：如果没勾选任何词，默认显示全部，否则按勾选显示
+        const displayKeys = activeKeys.length > 0 ? activeKeys : allKeys;
+        const filteredData = appData.filter(d => displayKeys.includes(d.Keyword));
 
-        // 3. 渲染表格
+        if (filteredData.length === 0) {
+            bodyEl.innerHTML = "<tr><td colspan='100%'>暂无数据或未选择关键词</td></tr>";
+            return;
+        }
+
         const keys = Array.from(new Set(filteredData.flatMap(Object.keys)));
-        document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
-        document.getElementById('tableBody').innerHTML = filteredData.map(row => 
+        headEl.innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
+        bodyEl.innerHTML = filteredData.map(row => 
             `<tr>${keys.map(k => `<td>${row[k] || '-'}</td>`).join('')}</tr>`
         ).join('');
         
-        // 4. 绘制图表
+        // 绘制图表
         const chart = echarts.init(document.getElementById('chartContainer'));
         const rankKeys = keys.filter(k => k.startsWith('Rank '));
         chart.setOption({
@@ -43,7 +86,7 @@
     }
 
     function deleteCurrentApp() {
-        if (confirm(`确定删除 ${currentApp}？`)) {
+        if (confirm(`确定删除 ${currentApp} 的所有数据吗？`)) {
             masterData = masterData.filter(d => d.App !== currentApp);
             localStorage.setItem('aso_master_data', JSON.stringify(masterData));
             location.reload();
@@ -57,5 +100,8 @@
         }
     }
 
-    window.onload = renderTable;
+    // 使用 DOMContentLoaded 确保页面加载完成再执行
+    window.addEventListener('DOMContentLoaded', renderTable);
 </script>
+</body>
+</html>
