@@ -24,19 +24,19 @@
 
         if (encodedData) {
             try {
-                // 严格解码
-                const rawData = atob(encodedData);
-                const decoded = decodeURIComponent(escape(rawData));
+                // 直接使用 decodeURIComponent 解析
+                const decoded = decodeURIComponent(encodedData);
                 const newData = JSON.parse(decoded);
                 
                 let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
                 masterData = masterData.concat(newData);
                 localStorage.setItem('aso_master_data', JSON.stringify(masterData));
                 
+                // 清理 URL 参数
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch (e) {
                 console.error("解析错误:", e);
-                alert("数据同步失败: " + e.message);
+                alert("数据解析失败: " + e.message);
             }
         }
         renderTable();
