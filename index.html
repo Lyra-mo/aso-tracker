@@ -1,16 +1,29 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>ASO 排名看板</title></head>
-<body style="font-family: sans-serif; padding: 20px;">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASO 动态监控宽表</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f7fafc; }
+        .tab-btn { padding: 10px 20px; cursor: pointer; border: 1px solid #cbd5e0; background: #edf2f7; margin-right: 5px; border-radius: 4px; }
+        .tab-btn.active { background: #4299e1; color: white; border: none; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
+        th { background: #edf2f7; }
+    </style>
+</head>
+<body>
     <h2>📈 ASO 动态监控宽表</h2>
-    <div id="appTabs" style="margin-bottom: 20px;"></div>
-    <table id="dataTable" border="1" style="border-collapse: collapse; width: 100%;">
+    <div id="appTabs" style="margin-bottom: 20px; display: flex;"></div>
+    <table id="dataTable">
         <thead id="tableHead"></thead>
         <tbody id="tableBody"></tbody>
     </table>
 
 <script>
     let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
+    let currentApp = localStorage.getItem('last_selected_app') || "";
 
     window.onload = function() {
         const params = new URLSearchParams(window.location.search);
@@ -20,15 +33,31 @@
             mergeAndRender(newData);
             window.history.replaceState({}, document.title, window.location.pathname);
         } else {
+            initTabs();
             renderTable();
         }
     };
+
+    function initTabs() {
+        const apps = [...new Set(masterData.map(d => d.App))];
+        if (apps.length > 0 && !currentApp) currentApp = apps[0];
+        const tabs = document.getElementById('appTabs');
+        tabs.innerHTML = apps.map(app => 
+            `<button class="tab-btn ${currentApp === app ? 'active' : ''}" onclick="selectApp('${app}')">${app}</button>`
+        ).join('');
+    }
+
+    function selectApp(app) {
+        currentApp = app;
+        localStorage.setItem('last_selected_app', app);
+        initTabs();
+        renderTable();
+    }
 
     function mergeAndRender(newData) {
         newData.forEach(newRow => {
             let existing = masterData.find(r => r.App === newRow.App && r.Keyword === newRow.Keyword);
             if (existing) {
-                // 关键点：动态添加日期列
                 existing[`Rank ${newRow.Date}`] = newRow.Rank;
                 existing["Change"] = newRow.Change;
             } else {
@@ -41,15 +70,30 @@
             }
         });
         localStorage.setItem('aso_master_data', JSON.stringify(masterData));
+        if(!currentApp) currentApp = newData[0].App;
+        initTabs();
         renderTable();
     }
 
     function renderTable() {
-        if (masterData.length === 0) return;
-        const keys = Array.from(new Set(masterData.flatMap(Object.keys)));
+        const appData = masterData.filter(d => d.App === currentApp);
+        if (appData.length === 0) return;
+        const keys = Array.from(new Set(appData.flatMap(Object.keys)));
         document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
-        document.getElementById('tableBody').innerHTML = masterData.map(row => 
-            `<tr>${keys.map(k => `<td>${row[k] || '-'}</td>`).join('')}</tr>`
+        document.getElementById('tableBody').innerHTML = appData.map(row => 
+            `<tr>${keys.map((k, index) => {
+                let val = row[k];
+                let style = "";
+                if (k.startsWith('Rank ') && index > 2) {
+                     let prevVal = row[keys[index - 1]];
+                     if (val && prevVal && !isNaN(val) && !isNaN(prevVal)) {
+                         let diff = parseInt(prevVal) - parseInt(val);
+                         if (diff > 0) style = "background-color: #feb2b2;"; // 上升红
+                         else if (diff < 0) style = "background-color: #9ae6b4;"; // 下降绿
+                     }
+                }
+                return `<td style="${style}">${val || '-'}</td>`;
+            }).join('')}</tr>`
         ).join('');
     }
 </script>
