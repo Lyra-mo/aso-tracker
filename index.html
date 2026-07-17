@@ -1,121 +1,61 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <title>ASO 动态监控看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <style>
-        body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
-        .control-panel { background: #fff; padding: 15px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
-        .tab-btn { padding: 10px 20px; cursor: pointer; border: 1px solid #cbd5e0; background: #edf2f7; margin-right: 5px; border-radius: 4px; }
-        .tab-btn.active { background: #4299e1; color: white; border: none; }
-        table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; }
-        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
-        th { background: #edf2f7; }
-    </style>
-</head>
-<body>
-
-    <h2>📈 ASO 动态监控看板</h2>
-
-    <!-- 数据控制台 -->
-    <div class="control-panel">
-        <span style="font-weight: bold; color: #4a5568;">⚙️ 数据控制台：</span>
-        <button onclick="deleteCurrentApp()" style="padding: 6px 12px; cursor: pointer; background: #feb2b2; border: none; border-radius: 4px; font-weight: bold;">🗑️ 删除当前 App</button>
-        <button onclick="resetDashboard()" style="padding: 6px 12px; cursor: pointer; background: #fbd38d; border: none; border-radius: 4px; font-weight: bold;">⚠️ 清空所有数据</button>
-    </div>
-
-    <div id="appTabs" style="margin-bottom: 20px;"></div>
-    <div id="chartContainer" style="width: 100%; height: 350px; background: #fff; border: 1px solid #e2e8f0; margin-bottom: 20px;"></div>
-    <table id="dataTable">
-        <thead id="tableHead"></thead>
-        <tbody id="tableBody"></tbody>
-    </table>
-
+<!-- index.html - 完整核心脚本部分 -->
 <script>
     let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
     let currentApp = localStorage.getItem('last_selected_app') || "";
+    let activeKeys = JSON.parse(localStorage.getItem('active_keys') || '[]');
 
-    window.onload = function() {
-        const params = new URLSearchParams(window.location.search);
-        const encodedData = params.get('data');
-        if (encodedData) {
-            mergeAndRender(JSON.parse(decodeURIComponent(atob(encodedData))));
-            window.history.replaceState({}, document.title, window.location.pathname);
-        } else { initTabs(); renderTable(); }
-    };
+    function renderTable() {
+        const appData = masterData.filter(d => d.App === currentApp);
+        const allKeys = [...new Set(appData.map(d => d.Keyword))];
+        
+        // 1. 渲染筛选框
+        document.getElementById('filterList').innerHTML = allKeys.map(k => 
+            `<label style="margin-right:10px;"><input type="checkbox" ${activeKeys.includes(k) ? 'checked' : ''} onchange="toggleKey('${k}')"> ${k}</label>`
+        ).join('');
 
-    // --- 删除当前选中 App ---
+        // 2. 过滤数据
+        const filteredData = appData.filter(d => activeKeys.includes(d.Keyword));
+        if (filteredData.length === 0) return;
+
+        // 3. 渲染表格
+        const keys = Array.from(new Set(filteredData.flatMap(Object.keys)));
+        document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
+        document.getElementById('tableBody').innerHTML = filteredData.map(row => 
+            `<tr>${keys.map(k => `<td>${row[k] || '-'}</td>`).join('')}</tr>`
+        ).join('');
+        
+        // 4. 绘制图表
+        const chart = echarts.init(document.getElementById('chartContainer'));
+        const rankKeys = keys.filter(k => k.startsWith('Rank '));
+        chart.setOption({
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: rankKeys.map(k => k.replace('Rank ', '')) },
+            yAxis: { type: 'value', inverse: true },
+            series: filteredData.map(d => ({ name: d.Keyword, type: 'line', data: rankKeys.map(k => d[k] || null) }))
+        });
+    }
+
+    function toggleKey(key) {
+        if(activeKeys.includes(key)) activeKeys = activeKeys.filter(k => k !== key);
+        else activeKeys.push(key);
+        localStorage.setItem('active_keys', JSON.stringify(activeKeys));
+        renderTable();
+    }
+
     function deleteCurrentApp() {
-        if (!currentApp) return;
-        if (confirm(`确定要彻底删除 [${currentApp}] 的所有历史数据吗？`)) {
+        if (confirm(`确定删除 ${currentApp}？`)) {
             masterData = masterData.filter(d => d.App !== currentApp);
             localStorage.setItem('aso_master_data', JSON.stringify(masterData));
-            currentApp = "";
-            localStorage.removeItem('last_selected_app');
             location.reload();
         }
     }
 
-    // --- 彻底重置 ---
     function resetDashboard() {
-        if(confirm("警告：确定要删除所有历史抓取数据吗？此操作不可恢复。")) {
+        if(confirm("确定清空所有数据？")) {
             localStorage.clear();
             location.reload();
         }
     }
 
-    function initTabs() {
-        const apps = [...new Set(masterData.map(d => d.App))];
-        if (apps.length > 0 && !currentApp) currentApp = apps[0];
-        document.getElementById('appTabs').innerHTML = apps.map(app => 
-            `<button class="tab-btn ${currentApp === app ? 'active' : ''}" onclick="selectApp('${app}')">${app}</button>`
-        ).join('');
-    }
-
-    function selectApp(app) { currentApp = app; localStorage.setItem('last_selected_app', app); initTabs(); renderTable(); }
-
-    function mergeAndRender(newData) {
-        newData.forEach(newRow => {
-            let existing = masterData.find(r => r.App === newRow.App && r.Keyword === newRow.Keyword);
-            if (existing) { existing[`Rank ${newRow.Date}`] = newRow.Rank; existing["Change"] = newRow.Change; }
-            else { masterData.push({"App": newRow.App, "Keyword": newRow.Keyword, [`Rank ${newRow.Date}`]: newRow.Rank, "Change": newRow.Change}); }
-        });
-        localStorage.setItem('aso_master_data', JSON.stringify(masterData));
-        if(!currentApp) currentApp = newData[0].App;
-        initTabs(); renderTable();
-    }
-
-    function renderTable() {
-        const appData = masterData.filter(d => d.App === currentApp);
-        if (appData.length === 0) return;
-        const keys = Array.from(new Set(appData.flatMap(Object.keys)));
-        document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
-        document.getElementById('tableBody').innerHTML = appData.map(row => 
-            `<tr>${keys.map((k, index) => {
-                let val = row[k], style = "";
-                if (k.startsWith('Rank ') && index > 2) {
-                     let prevVal = row[keys[index - 1]];
-                     if (val && prevVal && !isNaN(val) && !isNaN(prevVal)) {
-                         let diff = parseInt(prevVal) - parseInt(val);
-                         if (diff > 0) style = "background-color: #feb2b2;";
-                         else if (diff < 0) style = "background-color: #9ae6b4;";
-                     }
-                }
-                return `<td style="${style}">${val || '-'}</td>`;
-            }).join('')}</tr>`
-        ).join('');
-        
-        const chart = echarts.init(document.getElementById('chartContainer'));
-        const rankKeys = keys.filter(k => k.startsWith('Rank '));
-        chart.setOption({
-            title: { text: '关键词排名走势', left: 'center' },
-            tooltip: { trigger: 'axis' },
-            xAxis: { type: 'category', data: rankKeys.map(k => k.replace('Rank ', '')) },
-            yAxis: { type: 'value', inverse: true },
-            series: appData.map(d => ({ name: d.Keyword, type: 'line', data: rankKeys.map(k => d[k] || null) }))
-        });
-    }
+    window.onload = renderTable;
 </script>
-</body>
-</html>
