@@ -3,86 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <title>ASO 动态监控看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
         body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
-        .control-panel { background: #fff; padding: 15px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 20px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; }
-        th, td { border: 1px solid #e2e8f0; padding: 8px; text-align: center; }
+        table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
     </style>
 </head>
 <body>
-
     <h2>📈 ASO 动态监控看板</h2>
-
-    <div class="control-panel">
-        <button onclick="resetDashboard()" style="background:#fbd38d; border:none; padding:8px; cursor:pointer;">⚠️ 清空所有数据</button>
-    </div>
-
-    <div id="chartContainer" style="width: 100%; height: 350px;"></div>
+    <button onclick="localStorage.clear(); location.reload();">⚠️ 清空所有数据</button>
     <table id="dataTable">
         <thead id="tableHead"></thead>
         <tbody id="tableBody"></tbody>
     </table>
 
 <script>
-    // 1. 【核心接收逻辑】放在最顶部，优先执行
     window.addEventListener('DOMContentLoaded', () => {
         const params = new URLSearchParams(window.location.search);
         const encodedData = params.get('data');
 
         if (encodedData) {
             try {
-                // 解码插件传来的数据
-                const decoded = decodeURIComponent(atob(encodedData).split('').map(c => 
-                    '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
-                ).join(''));
-                
+                // 严格解码
+                const rawData = atob(encodedData);
+                const decoded = decodeURIComponent(escape(rawData));
                 const newData = JSON.parse(decoded);
                 
-                // 将新抓取的数据合并并存入本地
                 let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
                 masterData = masterData.concat(newData);
                 localStorage.setItem('aso_master_data', JSON.stringify(masterData));
                 
-                // 移除 URL 参数并重新渲染
                 window.history.replaceState({}, document.title, window.location.pathname);
-                renderTable(); 
             } catch (e) {
-                console.error("数据解析失败:", e);
+                console.error("解析错误:", e);
+                alert("数据同步失败: " + e.message);
             }
-        } else {
-            renderTable();
         }
+        renderTable();
     });
 
-    // 2. 【渲染逻辑】
     function renderTable() {
         const masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        const headEl = document.getElementById('tableHead');
-        const bodyEl = document.getElementById('tableBody');
-        
-        if (masterData.length === 0) {
-            bodyEl.innerHTML = "<tr><td colspan='100%'>暂无数据，请先通过插件抓取</td></tr>";
-            return;
-        }
+        if (masterData.length === 0) return;
 
-        // 取所有数据对象的 key 作为表头
-        const keys = Object.keys(masterData[0]);
-        headEl.innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
-        
-        // 渲染数据行
-        bodyEl.innerHTML = masterData.map(row => 
+        const keys = ["App", "Keyword", "Rank", "Date"];
+        document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
+        document.getElementById('tableBody').innerHTML = masterData.map(row => 
             `<tr>${keys.map(k => `<td>${row[k] || '-'}</td>`).join('')}</tr>`
         ).join('');
-    }
-
-    // 3. 【管理逻辑】
-    function resetDashboard() {
-        if(confirm("确定清空所有数据？")) {
-            localStorage.clear();
-            location.reload();
-        }
     }
 </script>
 </body>
