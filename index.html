@@ -2,20 +2,20 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASO 动态监控宽表</title>
+    <title>ASO 动态监控看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f7fafc; }
+        body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
         .tab-btn { padding: 10px 20px; cursor: pointer; border: 1px solid #cbd5e0; background: #edf2f7; margin-right: 5px; border-radius: 4px; }
-        .tab-btn.active { background: #4299e1; color: white; border: none; }
+        .tab-btn.active { background: #4299e1; color: white; }
         table { border-collapse: collapse; width: 100%; margin-top: 20px; background: white; }
         th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
-        th { background: #edf2f7; }
     </style>
 </head>
 <body>
-    <h2>📈 ASO 动态监控宽表</h2>
-    <div id="appTabs" style="margin-bottom: 20px; display: flex;"></div>
+    <h2>📈 ASO 动态监控看板</h2>
+    <div id="appTabs" style="margin-bottom: 20px;"></div>
+    <div id="chartContainer" style="width: 100%; height: 350px; background: #fff; border: 1px solid #e2e8f0;"></div>
     <table id="dataTable">
         <thead id="tableHead"></thead>
         <tbody id="tableBody"></tbody>
@@ -29,50 +29,30 @@
         const params = new URLSearchParams(window.location.search);
         const encodedData = params.get('data');
         if (encodedData) {
-            const newData = JSON.parse(decodeURIComponent(atob(encodedData)));
-            mergeAndRender(newData);
+            mergeAndRender(JSON.parse(decodeURIComponent(atob(encodedData))));
             window.history.replaceState({}, document.title, window.location.pathname);
-        } else {
-            initTabs();
-            renderTable();
-        }
+        } else { initTabs(); renderTable(); }
     };
 
     function initTabs() {
         const apps = [...new Set(masterData.map(d => d.App))];
         if (apps.length > 0 && !currentApp) currentApp = apps[0];
-        const tabs = document.getElementById('appTabs');
-        tabs.innerHTML = apps.map(app => 
+        document.getElementById('appTabs').innerHTML = apps.map(app => 
             `<button class="tab-btn ${currentApp === app ? 'active' : ''}" onclick="selectApp('${app}')">${app}</button>`
         ).join('');
     }
 
-    function selectApp(app) {
-        currentApp = app;
-        localStorage.setItem('last_selected_app', app);
-        initTabs();
-        renderTable();
-    }
+    function selectApp(app) { currentApp = app; localStorage.setItem('last_selected_app', app); initTabs(); renderTable(); }
 
     function mergeAndRender(newData) {
         newData.forEach(newRow => {
             let existing = masterData.find(r => r.App === newRow.App && r.Keyword === newRow.Keyword);
-            if (existing) {
-                existing[`Rank ${newRow.Date}`] = newRow.Rank;
-                existing["Change"] = newRow.Change;
-            } else {
-                masterData.push({
-                    "App": newRow.App,
-                    "Keyword": newRow.Keyword,
-                    [`Rank ${newRow.Date}`]: newRow.Rank,
-                    "Change": newRow.Change
-                });
-            }
+            if (existing) { existing[`Rank ${newRow.Date}`] = newRow.Rank; existing["Change"] = newRow.Change; }
+            else { masterData.push({"App": newRow.App, "Keyword": newRow.Keyword, [`Rank ${newRow.Date}`]: newRow.Rank, "Change": newRow.Change}); }
         });
         localStorage.setItem('aso_master_data', JSON.stringify(masterData));
         if(!currentApp) currentApp = newData[0].App;
-        initTabs();
-        renderTable();
+        initTabs(); renderTable();
     }
 
     function renderTable() {
@@ -82,19 +62,28 @@
         document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
         document.getElementById('tableBody').innerHTML = appData.map(row => 
             `<tr>${keys.map((k, index) => {
-                let val = row[k];
-                let style = "";
+                let val = row[k], style = "";
                 if (k.startsWith('Rank ') && index > 2) {
                      let prevVal = row[keys[index - 1]];
                      if (val && prevVal && !isNaN(val) && !isNaN(prevVal)) {
                          let diff = parseInt(prevVal) - parseInt(val);
-                         if (diff > 0) style = "background-color: #feb2b2;"; // 上升红
-                         else if (diff < 0) style = "background-color: #9ae6b4;"; // 下降绿
+                         if (diff > 0) style = "background-color: #feb2b2;";
+                         else if (diff < 0) style = "background-color: #9ae6b4;";
                      }
                 }
                 return `<td style="${style}">${val || '-'}</td>`;
             }).join('')}</tr>`
         ).join('');
+        
+        // 渲染图表
+        const chart = echarts.init(document.getElementById('chartContainer'));
+        const rankKeys = keys.filter(k => k.startsWith('Rank '));
+        chart.setOption({
+            tooltip: { trigger: 'axis' },
+            xAxis: { type: 'category', data: rankKeys.map(k => k.replace('Rank ', '')) },
+            yAxis: { type: 'value', inverse: true },
+            series: appData.map(d => ({ name: d.Keyword, type: 'line', data: rankKeys.map(k => d[k] || null) }))
+        });
     }
 </script>
 </body>
