@@ -13,7 +13,7 @@
     <h2>📈 ASO 动态监控看板</h2>
     <button onclick="localStorage.clear(); location.reload();">⚠️ 清空所有数据</button>
     <table id="dataTable">
-        <thead id="tableHead"></thead>
+        <thead id="tableHead"><tr><th>App</th><th>Keyword</th><th>Rank</th><th>Date</th></tr></thead>
         <tbody id="tableBody"></tbody>
     </table>
 
@@ -24,32 +24,23 @@
 
         if (encodedData) {
             try {
-                // 直接使用 decodeURIComponent 解析
-                const decoded = decodeURIComponent(encodedData);
-                const newData = JSON.parse(decoded);
-                
+                const newData = JSON.parse(decodeURIComponent(encodedData));
                 let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-                masterData = masterData.concat(newData);
+                
+                // 合并数据并去重
+                masterData = [...new Map([...masterData, ...newData].map(item => [item.Keyword, item])).values()];
                 localStorage.setItem('aso_master_data', JSON.stringify(masterData));
                 
-                // 清理 URL 参数
                 window.history.replaceState({}, document.title, window.location.pathname);
-            } catch (e) {
-                console.error("解析错误:", e);
-                alert("数据解析失败: " + e.message);
-            }
+            } catch (e) { alert("解析失败: " + e.message); }
         }
         renderTable();
     });
 
     function renderTable() {
-        const masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        if (masterData.length === 0) return;
-
-        const keys = ["App", "Keyword", "Rank", "Date"];
-        document.getElementById('tableHead').innerHTML = `<tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>`;
-        document.getElementById('tableBody').innerHTML = masterData.map(row => 
-            `<tr>${keys.map(k => `<td>${row[k] || '-'}</td>`).join('')}</tr>`
+        const data = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
+        document.getElementById('tableBody').innerHTML = data.map(row => 
+            `<tr><td>${row.App}</td><td>${row.Keyword}</td><td>${row.Rank}</td><td>${row.Date}</td></tr>`
         ).join('');
     }
 </script>
