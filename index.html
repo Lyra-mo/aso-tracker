@@ -7,16 +7,18 @@
     <style>
         body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
         .control-panel { background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
-        .filter-area { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .app-selector { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .app-btn { border: 1px solid #cbd5e0; padding: 6px 12px; border-radius: 4px; cursor: pointer; background: #edf2f7; }
+        .app-btn.active { background: #4299e1; color: white; }
         table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
-        th, td { border: 1px solid #e2e8f0; padding: 8px; text-align: center; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
     </style>
 </head>
 <body>
     <h2>📈 ASO 动态监控看板</h2>
     <div class="control-panel">
         <button onclick="localStorage.clear(); location.reload();" style="background:#feb2b2; border:none; padding:8px; cursor:pointer;">⚠️ 清空所有数据</button>
-        <div id="filterList" class="filter-area"></div>
+        <div id="appSelector" class="app-selector"></div>
     </div>
     
     <div id="chartContainer" style="width: 100%; height: 400px;"></div>
@@ -27,63 +29,74 @@
 
 <script>
     let chart = echarts.init(document.getElementById('chartContainer'));
-    let selectedKeywords = JSON.parse(localStorage.getItem('selected_kws') || '[]');
+    let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
 
+    // 接收插件传来的数据并合并
     window.addEventListener('DOMContentLoaded', () => {
         const params = new URLSearchParams(window.location.search);
         const encodedData = params.get('data');
-
         if (encodedData) {
-            const newData = JSON.parse(decodeURIComponent(encodedData));
-            let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-            masterData = [...masterData, ...newData];
-            localStorage.setItem('aso_master_data', JSON.stringify(masterData));
-            window.history.replaceState({}, document.title, window.location.pathname);
+            try {
+                const newData = JSON.parse(decodeURIComponent(encodedData));
+                let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
+                
+                // 基于 Keyword 和 App 进行去重合并
+                let map = new Map(masterData.map(item => [`${item.App}-${item.Keyword}-${item.Date}`, item]));
+                newData.forEach(item => map.set(`${item.App}-${item.Keyword}-${item.Date}`, item));
+                
+                localStorage.setItem('aso_master_data', JSON.stringify(Array.from(map.values())));
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } catch (e) { alert("数据处理错误: " + e.message); }
         }
         renderDashboard();
     });
 
     function renderDashboard() {
         const data = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        const allKeywords = [...new Set(data.map(d => d.Keyword))];
+        const allApps = [...new Set(data.map(d => d.App))];
         
-        // 1. 渲染筛选框
-        const filterEl = document.getElementById('filterList');
-        filterEl.innerHTML = allKeywords.map(k => `
-            <label style="background:#e2e8f0; padding:4px 8px; border-radius:4px; cursor:pointer;">
-                <input type="checkbox" ${selectedKeywords.includes(k) ? 'checked' : ''} onchange="toggleKeyword('${k}')"> ${k}
-            </label>`).join('');
+        // 渲染 App 按钮
+        const appSelector = document.getElementById('appSelector');
+        appSelector.innerHTML = allApps.map(app => `
+            <div class="app-btn ${selectedApps.includes(app) ? 'active' : ''}" onclick="toggleApp('${app}')">${app}</div>
+        `).join('');
 
-        // 2. 渲染表格
-        const filteredData = selectedKeywords.length > 0 ? data.filter(d => selectedKeywords.includes(d.Keyword)) : data;
+        // 筛选数据
+        const filteredData = selectedApps.length > 0 ? data.filter(d => selectedApps.includes(d.App)) : data;
+        
+        // 渲染表格
         document.getElementById('tableBody').innerHTML = filteredData.map(row => 
             `<tr><td>${row.App}</td><td>${row.Keyword}</td><td>${row.Rank}</td><td>${row.Date}</td></tr>`
         ).join('');
 
-        // 3. 渲染图表
-        const dates = [...new Set(filteredData.map(d => d.Date))].sort();
-        const series = selectedKeywords.map(kw => ({
-            name: kw, type: 'line', 
-            data: dates.map(date => {
-                const entry = filteredData.find(d => d.Keyword === kw && d.Date === date);
-                return entry ? parseInt(entry.Rank) : null;
-            })
-        }));
+        // 渲染图表
+        updateChart(filteredData);
+    }
+
+    function toggleApp(app) {
+        if(selectedApps.includes(app)) selectedApps = selectedApps.filter(a => a !== app);
+        else selectedApps.push(app);
+        localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+        renderDashboard();
+    }
+
+    function updateChart(data) {
+        const dates = [...new Set(data.map(d => d.Date))].sort();
+        const series = data.reduce((acc, curr) => {
+            let name = `${curr.App}:${curr.Keyword}`;
+            if (!acc[name]) acc[name] = { name, type: 'line', data: new Array(dates.length).fill(null) };
+            let idx = dates.indexOf(curr.Date);
+            acc[name].data[idx] = parseInt(curr.Rank);
+            return acc;
+        }, {});
 
         chart.setOption({
             tooltip: { trigger: 'axis' },
-            legend: { data: selectedKeywords },
+            legend: { type: 'scroll', data: Object.keys(series) },
             xAxis: { type: 'category', data: dates },
             yAxis: { type: 'value', inverse: true },
-            series: series
+            series: Object.values(series)
         });
-    }
-
-    function toggleKeyword(kw) {
-        if(selectedKeywords.includes(kw)) selectedKeywords = selectedKeywords.filter(k => k !== kw);
-        else selectedKeywords.push(kw);
-        localStorage.setItem('selected_kws', JSON.stringify(selectedKeywords));
-        renderDashboard();
     }
 </script>
 </body>
