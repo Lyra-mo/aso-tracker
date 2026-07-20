@@ -7,6 +7,9 @@
     <style>
         body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
         .control-panel { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
+        .app-selector { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+        .app-btn { border: 1px solid #cbd5e0; padding: 8px 16px; border-radius: 6px; cursor: pointer; background: #edf2f7; }
+        .app-btn.active { background: #4299e1; color: white; border-color: #3182ce; }
         table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
         th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: center; }
     </style>
@@ -14,25 +17,25 @@
 <body>
     <h2>📈 ASO 动态监控看板</h2>
     <div class="control-panel">
-        <button onclick="localStorage.clear(); location.reload();" style="background:#feb2b2; border:none; padding:10px 20px; cursor:pointer;">⚠️ 清空所有数据</button>
+        <button onclick="localStorage.clear(); location.reload();" style="background:#feb2b2; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">⚠️ 清空所有数据</button>
+        <div id="appSelector" class="app-selector"></div>
     </div>
     
     <div id="chartContainer" style="width: 100%; height: 400px;"></div>
     
     <table id="dataTable">
         <thead>
-            <tr><th>勾选</th><th>App</th><th>Keyword</th><th>Rank</th><th>Date</th></tr>
+            <tr><th>勾选</th><th>Keyword</th><th>Rank</th><th>Date</th></tr>
         </thead>
         <tbody id="tableBody"></tbody>
     </table>
 
 <script>
     let chart = echarts.init(document.getElementById('chartContainer'));
-    // 存储选中的“App-Keyword”组合
+    let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
     let selectedItems = JSON.parse(localStorage.getItem('selected_items') || '[]');
 
     window.addEventListener('DOMContentLoaded', () => {
-        // 数据处理逻辑保持不变
         const params = new URLSearchParams(window.location.search);
         const encodedData = params.get('data');
         if (encodedData) {
@@ -48,25 +51,38 @@
 
     function renderDashboard() {
         const data = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        // 拿到当前所有唯一的关键词组合
-        const uniqueEntries = Array.from(new Map(data.map(d => [`${d.App}-${d.Keyword}`, d])).values());
+        const allApps = [...new Set(data.map(d => d.App))];
+        
+        // 1. 渲染上方 App 按钮
+        const appSelector = document.getElementById('appSelector');
+        appSelector.innerHTML = allApps.map(app => `
+            <div class="app-btn ${selectedApps.includes(app) ? 'active' : ''}" onclick="toggleApp('${app}')">${app}</div>
+        `).join('');
 
-        // 渲染表格：表格里直接包含勾选框
+        // 2. 筛选：只显示选中 App 的数据
+        const filteredData = selectedApps.length > 0 ? data.filter(d => selectedApps.includes(d.App)) : data;
+        const uniqueEntries = Array.from(new Map(filteredData.map(d => [`${d.App}-${d.Keyword}`, d])).values());
+
+        // 3. 渲染表格 (去掉了 App 列)
         document.getElementById('tableBody').innerHTML = uniqueEntries.map(entry => {
             const key = `${entry.App}-${entry.Keyword}`;
             const isChecked = selectedItems.includes(key);
             return `<tr>
                 <td><input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItem('${key}')"></td>
-                <td>${entry.App}</td>
                 <td>${entry.Keyword}</td>
                 <td>${entry.Rank}</td>
                 <td>${entry.Date}</td>
             </tr>`;
         }).join('');
 
-        // 筛选选中数据并绘图
-        const filteredData = data.filter(d => selectedItems.includes(`${d.App}-${d.Keyword}`));
-        updateChart(filteredData);
+        updateChart(filteredData.filter(d => selectedItems.includes(`${d.App}-${d.Keyword}`)));
+    }
+
+    function toggleApp(app) {
+        if(selectedApps.includes(app)) selectedApps = selectedApps.filter(a => a !== app);
+        else selectedApps.push(app);
+        localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+        renderDashboard();
     }
 
     function toggleItem(key) {
@@ -79,7 +95,7 @@
     function updateChart(data) {
         const dates = [...new Set(data.map(d => d.Date))].sort();
         const seriesMap = data.reduce((acc, curr) => {
-            let key = `${curr.App}:${curr.Keyword}`;
+            let key = curr.Keyword; 
             if (!acc[key]) acc[key] = { name: key, type: 'line', data: new Array(dates.length).fill(null) };
             let idx = dates.indexOf(curr.Date);
             acc[key].data[idx] = parseInt(curr.Rank);
@@ -88,7 +104,7 @@
 
         chart.setOption({
             tooltip: { trigger: 'axis' },
-            legend: { show: false }, // 完全隐藏图表上方的图例，保持画面干净
+            legend: { type: 'scroll', show: true },
             xAxis: { type: 'category', data: dates },
             yAxis: { type: 'value', inverse: true, name: '排名' },
             series: Object.values(seriesMap)
