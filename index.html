@@ -11,7 +11,12 @@
         .app-btn { border: 1px solid #cbd5e0; padding: 8px 16px; border-radius: 6px; cursor: pointer; background: #edf2f7; }
         .app-btn.active { background: #4299e1; color: white; border-color: #3182ce; }
         table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
-        th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: center; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
+        .up { color: #38a169; font-weight: bold; }
+        .down { color: #e53e3e; font-weight: bold; }
+        .date-tag { display: inline-block; background: #edf2f7; padding: 2px 6px; border-radius: 4px; margin: 2px; font-size: 12px; }
+        .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: bold; }
+        .del-day-btn:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -25,7 +30,16 @@
     
     <table id="dataTable">
         <thead>
-            <tr><th>勾选</th><th>Keyword</th><th>Rank</th><th>Date</th><th>操作</th></tr>
+            <tr>
+                <th>勾选</th>
+                <th>Keyword</th>
+                <th>首刷排名 ( Date )</th>
+                <th>最新排名 ( Date )</th>
+                <th>抓取间隔</th>
+                <th>Rank Change</th>
+                <th>历史抓取明细 (可按天删除)</th>
+                <th>整词操作</th>
+            </tr>
         </thead>
         <tbody id="tableBody"></tbody>
     </table>
@@ -44,18 +58,12 @@
                 const newData = JSON.parse(decodeURIComponent(encodedData));
                 let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
                 
-                // 以 App + Keyword + Date 为唯一标识，确保多天数据互不覆盖、独立存在
                 let map = new Map(masterData.map(i => [`${i.App}_${i.Keyword}_${i.Date}`, i]));
-                newData.forEach(i => {
-                    map.set(`${i.App}_${i.Keyword}_${i.Date}`, i);
-                });
+                newData.forEach(i => map.set(`${i.App}_${i.Keyword}_${i.Date}`, i));
                 
-                masterData = Array.from(map.values());
-                localStorage.setItem('aso_master_data', JSON.stringify(masterData));
+                localStorage.setItem('aso_master_data', JSON.stringify(Array.from(map.values())));
                 window.history.replaceState({}, document.title, window.location.pathname);
-            } catch (e) {
-                console.error("数据解析失败", e);
-            }
+            } catch (e) { console.error("数据解析失败", e); }
         }
         renderDashboard();
     });
@@ -64,7 +72,6 @@
         const data = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
         const allApps = [...new Set(data.map(d => d.App))];
         
-        // 1. 渲染上方 App 筛选按钮
         const appSelector = document.getElementById('appSelector');
         if(appSelector) {
             appSelector.innerHTML = allApps.map(app => `
@@ -72,35 +79,99 @@
             `).join('');
         }
 
-        // 2. 筛选当前选中 App 的数据
         const filteredData = selectedApps.length > 0 ? data.filter(d => selectedApps.includes(d.App)) : data;
-        
-        // 3. 渲染下方表格（含复选框与单条删除按钮）
-        document.getElementById('tableBody').innerHTML = filteredData.map((entry) => {
-            const key = `${entry.App}-${entry.Keyword}`;
+
+        // 按 App + Keyword 分组
+        const keywordMap = {};
+        filteredData.forEach(item => {
+            const k = `${item.App}_${item.Keyword}`;
+            if (!keywordMap[k]) keywordMap[k] = [];
+            keywordMap[k].push(item);
+        });
+
+        const aggregatedRows = Object.keys(keywordMap).map(k => {
+            // 按日期升序排列
+            const records = keywordMap[k].sort((a, b) => new Date(a.Date) - new Date(b.Date));
+            const first = records[0];
+            const last = records[records.length - 1];
+            
+            // 自动计算间隔天数
+            const d1 = new Date(first.Date);
+            const d2 = new Date(last.Date);
+            const diffDays = Math.round(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24));
+
+            let intervalStr = "-";
+            if (records.length > 1) {
+                intervalStr = `<b>+${diffDays}天</b> (${last.Date})`;
+            } else {
+                intervalStr = `<span style="color:#a0aec0;">单次抓取</span>`;
+            }
+
+            // Rank Change 计算 (排名数字越小越好)
+            const firstRank = parseInt(first.Rank);
+            const lastRank = parseInt(last.Rank);
+            const diff = firstRank - lastRank;
+            
+            let changeHtml = '-';
+            if (records.length > 1) {
+                if (diff > 0) changeHtml = `<span class="up">↑ ${diff}</span>`;
+                else if (diff < 0) changeHtml = `<span class="down">↓ ${Math.abs(diff)}</span>`;
+                else changeHtml = `<span style="color:#718096;">- 0</span>`;
+            }
+
+            // 生成历史明细标签 (带按天删除功能)
+            const historyHtml = records.map(r => `
+                <span class="date-tag">
+                    ${r.Date}: <b>#${r.Rank}</b>
+                    <span class="del-day-btn" onclick="deleteSingleDate('${r.App}', '${r.Keyword}', '${r.Date}')" title="删除该天记录">✕</span>
+                </span>
+            `).join('');
+
+            return {
+                App: first.App,
+                Keyword: first.Keyword,
+                firstRankText: `#${first.Rank} (${first.Date})`,
+                lastRankText: `#${last.Rank} (${last.Date})`,
+                intervalStr: intervalStr,
+                changeHtml: changeHtml,
+                historyHtml: historyHtml
+            };
+        });
+
+        // 渲染表格
+        document.getElementById('tableBody').innerHTML = aggregatedRows.map(row => {
+            const key = `${row.App}-${row.Keyword}`;
             const isChecked = selectedItems.includes(key);
-            const uniqueId = `${entry.App}_${entry.Keyword}_${entry.Date}`;
             
             return `<tr>
                 <td><input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItem('${key}')"></td>
-                <td>${entry.Keyword}</td>
-                <td>${entry.Rank}</td>
-                <td>${entry.Date}</td>
-                <td><button onclick="deleteRecord('${uniqueId}')" style="background:#feb2b2; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">删除</button></td>
+                <td><b>${row.Keyword}</b></td>
+                <td>${row.firstRankText}</td>
+                <td>${row.lastRankText}</td>
+                <td>${row.intervalStr}</td>
+                <td>${row.changeHtml}</td>
+                <td style="text-align:left;">${row.historyHtml}</td>
+                <td><button onclick="deleteKeywordGroup('${row.App}', '${row.Keyword}')" style="background:#feb2b2; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">删整词</button></td>
             </tr>`;
         }).join('');
 
-        // 4. 联动更新折线图
         updateChart(filteredData.filter(d => selectedItems.includes(`${d.App}-${d.Keyword}`)));
     }
 
-    // 单条记录删除函数
-    function deleteRecord(uniqueId) {
-        if (!confirm("确定要删除这条抓取记录吗？")) return;
+    // 删除某一天抓取的单条记录
+    function deleteSingleDate(app, keyword, date) {
+        if (!confirm(`确定要删除关键词【${keyword}】在 ${date} 的抓取数据吗？`)) return;
         let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        
-        masterData = masterData.filter(i => `${i.App}_${i.Keyword}_${i.Date}` !== uniqueId);
-        
+        masterData = masterData.filter(i => !(i.App === app && i.Keyword === keyword && i.Date === date));
+        localStorage.setItem('aso_master_data', JSON.stringify(masterData));
+        renderDashboard();
+    }
+
+    // 删除该关键词的全部历史
+    function deleteKeywordGroup(app, keyword) {
+        if (!confirm(`确定要彻底删除【${keyword}】的所有历史数据吗？`)) return;
+        let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
+        masterData = masterData.filter(i => !(i.App === app && i.Keyword === keyword));
         localStorage.setItem('aso_master_data', JSON.stringify(masterData));
         renderDashboard();
     }
@@ -121,14 +192,11 @@
 
     function updateChart(data) {
         const dates = [...new Set(data.map(d => d.Date))].sort((a, b) => new Date(a) - new Date(b));
-        
         const seriesMap = data.reduce((acc, curr) => {
             let key = curr.Keyword; 
             if (!acc[key]) acc[key] = { name: key, type: 'line', data: new Array(dates.length).fill(null) };
             let idx = dates.indexOf(curr.Date);
-            if (idx !== -1) {
-                acc[key].data[idx] = parseInt(curr.Rank);
-            }
+            if (idx !== -1) acc[key].data[idx] = parseInt(curr.Rank);
             return acc;
         }, {});
 
