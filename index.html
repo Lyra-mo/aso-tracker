@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板 v1.7</title>
+  <title>ASO 动态监控看板 v1.8</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <style>
@@ -39,7 +39,8 @@
   <div class="control-panel">
     <div class="toolbar">
       <button id="exportBtn" class="export-btn">导出 JSON 备份</button>
-      <button id="excelExportBtn" class="excel-btn">导出 Excel 报表</button>
+      <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
+      <button id="excelAllBtn" class="excel-btn">导出全部 Excel</button>
       <button id="importBtn" class="import-btn">导入 JSON 备份</button>
       <input id="importFile" type="file" accept="application/json,.json" hidden>
       <button id="clearBtn" class="clear-btn">⚠️ 清空所有数据</button>
@@ -51,7 +52,7 @@
     <div class="selector-title">测试批次筛选</div>
     <div id="batchSelector" class="selector"></div>
 
-    <div class="hint">同一个 App 的不同测试轮次会按批次独立计算。Excel 报表包含“排名汇总”和“排名趋势图”两个 Sheet，并导出全部数据。</div>
+    <div class="hint">“导出当前筛选”只导出当前 App／测试批次筛选后表格中显示的数据；“导出全部”导出所有 App 和批次。勾选框只控制网页折线图，不影响 Excel 导出。</div>
   </div>
 
   <div id="chartContainer" style="width:100%;height:400px;"></div>
@@ -430,7 +431,7 @@
 
   function exportData() {
     const payload = {
-      version: '1.7',
+      version: '1.8',
       exportedAt: new Date().toISOString(),
       data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
     };
@@ -561,10 +562,41 @@
     return image;
   }
 
-  async function exportExcelReport() {
-    const button = document.getElementById('excelExportBtn');
-    const originalText = button.textContent;
-    const records = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+  function getAllRecords() {
+    return normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+  }
+
+  function getCurrentFilteredRecords() {
+    let records = getAllRecords();
+    if (selectedApps.length) {
+      records = records.filter(item => selectedApps.includes(item.App));
+    }
+    if (selectedBatches.length) {
+      records = records.filter(item => selectedBatches.includes(item.Batch));
+    }
+    return records;
+  }
+
+  function buildCurrentScopeLabel(records) {
+    const apps = [...new Set(records.map(item => item.App))];
+    const batches = [...new Set(records.map(item => item.Batch))];
+
+    if (apps.length === 1 && batches.length === 1) {
+      return `${apps[0]}｜${batches[0]}`;
+    }
+    if (apps.length === 1) {
+      return `${apps[0]}｜当前批次筛选`;
+    }
+    return '当前筛选';
+  }
+
+  async function exportExcelReport(records, scopeLabel, clickedButton) {
+    const excelButtons = [
+      document.getElementById('excelCurrentBtn'),
+      document.getElementById('excelAllBtn')
+    ].filter(Boolean);
+    const originalTexts = new Map(excelButtons.map(button => [button, button.textContent]));
+    const button = clickedButton;
 
     if (!records.length) {
       alert('当前没有可导出的排名数据。');
@@ -576,7 +608,7 @@
       return;
     }
 
-    button.disabled = true;
+    excelButtons.forEach(item => { item.disabled = true; });
     button.textContent = '正在生成 Excel…';
 
     try {
@@ -599,7 +631,7 @@
 
       summarySheet.mergeCells('A2:J2');
       const infoCell = summarySheet.getCell('A2');
-      infoCell.value = `导出时间：${new Date().toLocaleString()}｜节点：D0、D3、D7、D14、D28`;
+      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜节点：D0、D3、D7、D14、D28`;
       infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
       infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
@@ -724,7 +756,7 @@
       }
 
       const buffer = await workbook.xlsx.writeBuffer();
-      const filename = `ASO排名跟踪_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const filename = `ASO排名跟踪_${safeFilePart(scopeLabel)}_${new Date().toISOString().slice(0, 10)}.xlsx`;
       downloadBlob(
         new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         safeFilePart(filename)
@@ -733,8 +765,10 @@
       console.error('Excel 导出失败：', error);
       alert(`Excel 导出失败：${error.message || error}`);
     } finally {
-      button.disabled = false;
-      button.textContent = originalText;
+      excelButtons.forEach(item => {
+        item.disabled = false;
+        item.textContent = originalTexts.get(item);
+      });
     }
   }
 
@@ -761,7 +795,14 @@
     renderDashboard();
 
     document.getElementById('exportBtn').addEventListener('click', exportData);
-    document.getElementById('excelExportBtn').addEventListener('click', exportExcelReport);
+    document.getElementById('excelCurrentBtn').addEventListener('click', () => {
+      const records = getCurrentFilteredRecords();
+      const label = buildCurrentScopeLabel(records);
+      exportExcelReport(records, label, document.getElementById('excelCurrentBtn'));
+    });
+    document.getElementById('excelAllBtn').addEventListener('click', () => {
+      exportExcelReport(getAllRecords(), '全部数据', document.getElementById('excelAllBtn'));
+    });
     document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
     document.getElementById('importFile').addEventListener('change', event => {
       const file = event.target.files?.[0];
