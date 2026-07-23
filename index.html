@@ -2,14 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板</title>
+  <title>ASO 动态监控看板 v1.7</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; background: #f7fafc; color: #2d3748; }
     .control-panel { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
     .toolbar button { border: 0; padding: 9px 14px; border-radius: 6px; cursor: pointer; font-weight: 700; }
     .export-btn, .import-btn { background: #edf2f7; color: #2d3748; }
+    .excel-btn { background: #c6f6d5; color: #22543d; }
+    .toolbar button:disabled { opacity: 0.6; cursor: not-allowed; }
     .clear-btn { background: #feb2b2; color: #742a2a; }
     .selector-title { margin-top: 12px; font-size: 13px; font-weight: 700; color: #4a5568; }
     .selector { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -35,8 +38,9 @@
 
   <div class="control-panel">
     <div class="toolbar">
-      <button id="exportBtn" class="export-btn">导出数据备份</button>
-      <button id="importBtn" class="import-btn">导入数据备份</button>
+      <button id="exportBtn" class="export-btn">导出 JSON 备份</button>
+      <button id="excelExportBtn" class="excel-btn">导出 Excel 报表</button>
+      <button id="importBtn" class="import-btn">导入 JSON 备份</button>
       <input id="importFile" type="file" accept="application/json,.json" hidden>
       <button id="clearBtn" class="clear-btn">⚠️ 清空所有数据</button>
     </div>
@@ -47,7 +51,7 @@
     <div class="selector-title">测试批次筛选</div>
     <div id="batchSelector" class="selector"></div>
 
-    <div class="hint">同一个 App 的不同测试轮次会按批次独立计算首刷、第3/7/14/28天和排名变化。</div>
+    <div class="hint">同一个 App 的不同测试轮次会按批次独立计算。Excel 报表包含“排名汇总”和“排名趋势图”两个 Sheet，并导出全部数据。</div>
   </div>
 
   <div id="chartContainer" style="width:100%;height:400px;"></div>
@@ -73,8 +77,8 @@
 
 <script>
   const MASTER_KEY = 'aso_master_data';
-  const BACKUP_KEY = 'aso_master_data_backup_before_batch_v16';
-  const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v16';
+  const BACKUP_KEY = 'aso_master_data_backup_before_excel_v17';
+  const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v17';
   const CHECKPOINTS = [0, 3, 7, 14, 28];
 
   const chart = echarts.init(document.getElementById('chartContainer'));
@@ -126,11 +130,11 @@
       }
     });
 
-    return list.map(item => {
+    const provisional = list.map(item => {
       const app = String(item.App || '未命名 App').trim();
       const date = toDateKey(item.Date);
-      const firstDate = earliestByApp[app] || date;
-      const batch = String(item.Batch || item.batchName || `T1-${compactDate(firstDate)}`).trim();
+      const defaultFirstDate = earliestByApp[app] || date;
+      const batch = String(item.Batch || item.batchName || `T1-${compactDate(defaultFirstDate)}`).trim();
 
       return {
         ...item,
@@ -138,12 +142,28 @@
         Batch: batch,
         Keyword: String(item.Keyword || '').trim(),
         Rank: String(item.Rank || '').trim(),
-        Date: date,
-        Checkpoint: Number.isFinite(Number(item.Checkpoint))
-          ? Number(item.Checkpoint)
-          : inferCheckpoint(date, firstDate)
+        Date: date
       };
     }).filter(item => item.Keyword && /^\d+$/.test(item.Rank));
+
+    const earliestByAppBatch = {};
+    provisional.forEach(item => {
+      const key = `${item.App}__${item.Batch}`;
+      if (!earliestByAppBatch[key] || parseDate(item.Date) < parseDate(earliestByAppBatch[key])) {
+        earliestByAppBatch[key] = item.Date;
+      }
+    });
+
+    return provisional.map(item => {
+      const firstDate = earliestByAppBatch[`${item.App}__${item.Batch}`] || item.Date;
+      const dayOffset = diffDays(item.Date, firstDate);
+
+      return {
+        ...item,
+        DayOffset: dayOffset,
+        Checkpoint: CHECKPOINTS.includes(dayOffset) ? dayOffset : null
+      };
+    });
   }
 
   function recordKey(item) {
@@ -287,7 +307,7 @@
       const history = row.records.map(record => `
         <span class="date-tag">
           ${record.Date}: <b>#${record.Rank}</b>
-          <span class="checkpoint">D${record.Checkpoint || 0}</span>
+          <span class="checkpoint">${record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`}</span>
           <span class="del-day-btn"
             data-app="${encode(record.App)}"
             data-batch="${encode(record.Batch)}"
@@ -410,7 +430,7 @@
 
   function exportData() {
     const payload = {
-      version: '1.6',
+      version: '1.7',
       exportedAt: new Date().toISOString(),
       data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
     };
@@ -421,6 +441,301 @@
     link.download = `aso-dashboard-backup-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function groupRecordsForReport(records) {
+    const groups = {};
+    normalizeRecords(records).forEach(item => {
+      const key = itemKey(item);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+
+    return Object.values(groups).map(group => {
+      group.sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+      return group;
+    }).sort((a, b) => {
+      const left = `${a[0].App}${a[0].Batch}${a[0].Keyword}`;
+      const right = `${b[0].App}${b[0].Batch}${b[0].Keyword}`;
+      return left.localeCompare(right);
+    });
+  }
+
+  function formatRankPoint(record) {
+    return record ? `#${record.Rank} (${record.Date})` : '';
+  }
+
+  function safeFilePart(value) {
+    return String(value || '')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function renderTrendChartImage(app, batch, records) {
+    const container = document.createElement('div');
+    container.style.cssText = [
+      'position:fixed',
+      'left:-10000px',
+      'top:0',
+      'width:1400px',
+      'height:440px',
+      'background:#ffffff'
+    ].join(';');
+    document.body.appendChild(container);
+
+    const exportChart = echarts.init(container, null, { renderer: 'canvas' });
+    const dates = [...new Set(records.map(item => item.Date))]
+      .sort((a, b) => parseDate(a) - parseDate(b));
+    const keywordMap = {};
+
+    records.forEach(item => {
+      if (!keywordMap[item.Keyword]) {
+        keywordMap[item.Keyword] = {
+          name: item.Keyword,
+          type: 'line',
+          symbol: 'circle',
+          symbolSize: 7,
+          connectNulls: false,
+          data: new Array(dates.length).fill(null)
+        };
+      }
+      keywordMap[item.Keyword].data[dates.indexOf(item.Date)] = Number(item.Rank);
+    });
+
+    exportChart.setOption({
+      animation: false,
+      backgroundColor: '#ffffff',
+      title: {
+        text: `${app}｜${batch}`,
+        subtext: '排名数字越小越好',
+        left: 'center',
+        top: 8,
+        textStyle: { fontSize: 20, fontWeight: 'bold' },
+        subtextStyle: { fontSize: 12 }
+      },
+      tooltip: { trigger: 'axis' },
+      legend: {
+        type: 'scroll',
+        bottom: 8,
+        left: 30,
+        right: 30
+      },
+      grid: { left: 70, right: 40, top: 85, bottom: 85 },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: dates,
+        axisLabel: { rotate: dates.length > 8 ? 35 : 0 }
+      },
+      yAxis: {
+        type: 'value',
+        inverse: true,
+        name: '排名',
+        min: 1,
+        minInterval: 1,
+        splitLine: { lineStyle: { color: '#e2e8f0' } }
+      },
+      series: Object.values(keywordMap)
+    });
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const image = exportChart.getDataURL({
+      type: 'png',
+      pixelRatio: 2,
+      backgroundColor: '#ffffff'
+    });
+    exportChart.dispose();
+    container.remove();
+    return image;
+  }
+
+  async function exportExcelReport() {
+    const button = document.getElementById('excelExportBtn');
+    const originalText = button.textContent;
+    const records = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+
+    if (!records.length) {
+      alert('当前没有可导出的排名数据。');
+      return;
+    }
+
+    if (typeof ExcelJS === 'undefined') {
+      alert('Excel 导出组件加载失败，请检查网络后刷新页面重试。');
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '正在生成 Excel…';
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'ASO 动态监控看板';
+      workbook.created = new Date();
+      workbook.modified = new Date();
+
+      const summarySheet = workbook.addWorksheet('排名汇总', {
+        views: [{ state: 'frozen', ySplit: 4 }]
+      });
+
+      summarySheet.mergeCells('A1:J1');
+      const titleCell = summarySheet.getCell('A1');
+      titleCell.value = 'ASO 关键词排名汇总';
+      titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B6CB0' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      summarySheet.getRow(1).height = 30;
+
+      summarySheet.mergeCells('A2:J2');
+      const infoCell = summarySheet.getCell('A2');
+      infoCell.value = `导出时间：${new Date().toLocaleString()}｜节点：D0、D3、D7、D14、D28`;
+      infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
+      infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+      const headers = ['App', '测试批次', 'Keyword', 'D0', 'D3', 'D7', 'D14', 'D28', '最新排名', 'Rank Change'];
+      const headerRow = summarySheet.getRow(4);
+      headerRow.values = headers;
+      headerRow.height = 26;
+      headerRow.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A5568' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          bottom: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E0' } }
+        };
+      });
+
+      const groups = groupRecordsForReport(records);
+      groups.forEach(group => {
+        const first = group[0];
+        const last = group[group.length - 1];
+        const checkpointRecord = checkpoint => group.find(item => item.DayOffset === checkpoint);
+        const rankChange = Number(first.Rank) - Number(last.Rank);
+        const row = summarySheet.addRow([
+          first.App,
+          first.Batch,
+          first.Keyword,
+          formatRankPoint(checkpointRecord(0)),
+          formatRankPoint(checkpointRecord(3)),
+          formatRankPoint(checkpointRecord(7)),
+          formatRankPoint(checkpointRecord(14)),
+          formatRankPoint(checkpointRecord(28)),
+          formatRankPoint(last),
+          rankChange
+        ]);
+
+        row.height = 34;
+        row.eachCell((cell, colNumber) => {
+          cell.alignment = {
+            horizontal: colNumber === 3 ? 'left' : 'center',
+            vertical: 'middle',
+            wrapText: true
+          };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+        });
+
+        const changeCell = row.getCell(10);
+        changeCell.numFmt = '+0;-0;0';
+        if (rankChange > 0) {
+          changeCell.font = { bold: true, color: { argb: 'FF25855A' } };
+          changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6F6D5' } };
+        } else if (rankChange < 0) {
+          changeCell.font = { bold: true, color: { argb: 'FFC53030' } };
+          changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFED7D7' } };
+        }
+      });
+
+      summarySheet.columns = [
+        { key: 'app', width: 22 },
+        { key: 'batch', width: 18 },
+        { key: 'keyword', width: 34 },
+        { key: 'd0', width: 21 },
+        { key: 'd3', width: 21 },
+        { key: 'd7', width: 21 },
+        { key: 'd14', width: 21 },
+        { key: 'd28', width: 21 },
+        { key: 'latest', width: 22 },
+        { key: 'change', width: 15 }
+      ];
+      summarySheet.autoFilter = `A4:J${Math.max(4, summarySheet.rowCount)}`;
+
+      const trendSheet = workbook.addWorksheet('排名趋势图', {
+        properties: { defaultRowHeight: 18 },
+        views: [{ showGridLines: false }]
+      });
+      trendSheet.getColumn(1).width = 20;
+      for (let col = 2; col <= 12; col += 1) trendSheet.getColumn(col).width = 14;
+
+      const appBatchGroups = {};
+      records.forEach(item => {
+        const key = `${item.App}__${item.Batch}`;
+        if (!appBatchGroups[key]) appBatchGroups[key] = [];
+        appBatchGroups[key].push(item);
+      });
+
+      const sortedChartGroups = Object.values(appBatchGroups).sort((a, b) => {
+        const left = `${a[0].App}${a[0].Batch}`;
+        const right = `${b[0].App}${b[0].Batch}`;
+        return left.localeCompare(right);
+      });
+
+      let rowCursor = 1;
+      for (let index = 0; index < sortedChartGroups.length; index += 1) {
+        const group = sortedChartGroups[index];
+        const app = group[0].App;
+        const batch = group[0].Batch;
+        button.textContent = `正在生成图表 ${index + 1}/${sortedChartGroups.length}…`;
+
+        trendSheet.mergeCells(rowCursor, 1, rowCursor, 12);
+        const chartTitle = trendSheet.getCell(rowCursor, 1);
+        chartTitle.value = `${app}｜${batch}`;
+        chartTitle.font = { size: 15, bold: true, color: { argb: 'FF2D3748' } };
+        chartTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDF2F7' } };
+        chartTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+        trendSheet.getRow(rowCursor).height = 26;
+
+        const imageBase64 = await renderTrendChartImage(app, batch, group);
+        const imageId = workbook.addImage({ base64: imageBase64, extension: 'png' });
+        trendSheet.addImage(imageId, {
+          tl: { col: 0, row: rowCursor },
+          ext: { width: 1180, height: 380 }
+        });
+
+        rowCursor += 22;
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const filename = `ASO排名跟踪_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      downloadBlob(
+        new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        safeFilePart(filename)
+      );
+    } catch (error) {
+      console.error('Excel 导出失败：', error);
+      alert(`Excel 导出失败：${error.message || error}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   }
 
   function importData(file) {
@@ -446,6 +761,7 @@
     renderDashboard();
 
     document.getElementById('exportBtn').addEventListener('click', exportData);
+    document.getElementById('excelExportBtn').addEventListener('click', exportExcelReport);
     document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
     document.getElementById('importFile').addEventListener('change', event => {
       const file = event.target.files?.[0];
