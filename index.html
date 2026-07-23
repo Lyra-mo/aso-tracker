@@ -1,213 +1,471 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>ASO 动态监控看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <style>
-        body { font-family: sans-serif; padding: 20px; background: #f7fafc; }
-        .control-panel { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
-        .app-selector { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
-        .app-btn { border: 1px solid #cbd5e0; padding: 8px 16px; border-radius: 6px; cursor: pointer; background: #edf2f7; }
-        .app-btn.active { background: #4299e1; color: white; border-color: #3182ce; }
-        table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
-        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; }
-        .up { color: #38a169; font-weight: bold; }
-        .down { color: #e53e3e; font-weight: bold; }
-        .date-tag { display: inline-block; background: #edf2f7; padding: 2px 6px; border-radius: 4px; margin: 2px; font-size: 12px; }
-        .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: bold; }
-        .del-day-btn:hover { text-decoration: underline; }
-    </style>
+  <meta charset="UTF-8">
+  <title>ASO 动态监控看板</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f7fafc; color: #2d3748; }
+    .control-panel { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .toolbar button { border: 0; padding: 9px 14px; border-radius: 6px; cursor: pointer; font-weight: 700; }
+    .export-btn, .import-btn { background: #edf2f7; color: #2d3748; }
+    .clear-btn { background: #feb2b2; color: #742a2a; }
+    .selector-title { margin-top: 12px; font-size: 13px; font-weight: 700; color: #4a5568; }
+    .selector { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .selector-btn { border: 1px solid #cbd5e0; padding: 7px 13px; border-radius: 999px; cursor: pointer; background: #edf2f7; }
+    .selector-btn.active { background: #4299e1; color: #fff; border-color: #3182ce; }
+    .batch-btn.active { background: #38a169; border-color: #2f855a; }
+    .hint { margin-top: 10px; color: #718096; font-size: 12px; }
+    table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 20px; }
+    th, td { border: 1px solid #e2e8f0; padding: 9px; text-align: center; }
+    th { background: #f8fafc; }
+    .up { color: #38a169; font-weight: 700; }
+    .down { color: #e53e3e; font-weight: 700; }
+    .date-tag { display: inline-block; background: #edf2f7; padding: 3px 7px; border-radius: 4px; margin: 2px; font-size: 12px; }
+    .checkpoint { color: #718096; font-size: 10px; margin-left: 3px; }
+    .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
+    .delete-word-btn { background: #feb2b2; border: 0; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+    .batch-tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e6fffa; color: #276749; font-size: 12px; white-space: nowrap; }
+    #emptyState { display: none; padding: 30px; text-align: center; color: #718096; background: #fff; border: 1px dashed #cbd5e0; }
+  </style>
 </head>
 <body>
-    <h2>📈 ASO 动态监控看板</h2>
-    <div class="control-panel">
-        <button onclick="localStorage.clear(); location.reload();" style="background:#feb2b2; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">⚠️ 清空所有数据</button>
-        <div id="appSelector" class="app-selector"></div>
+  <h2>📈 ASO 动态监控看板</h2>
+
+  <div class="control-panel">
+    <div class="toolbar">
+      <button id="exportBtn" class="export-btn">导出数据备份</button>
+      <button id="importBtn" class="import-btn">导入数据备份</button>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+      <button id="clearBtn" class="clear-btn">⚠️ 清空所有数据</button>
     </div>
-    
-    <div id="chartContainer" style="width: 100%; height: 400px;"></div>
-    
-    <table id="dataTable">
-        <thead>
-            <tr>
-                <th>勾选</th>
-                <th>Keyword</th>
-                <th>首刷排名 ( Date )</th>
-                <th>最新排名 ( Date )</th>
-                <th>抓取间隔</th>
-                <th>Rank Change</th>
-                <th>历史抓取明细 (可按天删除)</th>
-                <th>整词操作</th>
-            </tr>
-        </thead>
-        <tbody id="tableBody"></tbody>
-    </table>
+
+    <div class="selector-title">App 筛选</div>
+    <div id="appSelector" class="selector"></div>
+
+    <div class="selector-title">测试批次筛选</div>
+    <div id="batchSelector" class="selector"></div>
+
+    <div class="hint">同一个 App 的不同测试轮次会按批次独立计算首刷、第3/7/14/28天和排名变化。</div>
+  </div>
+
+  <div id="chartContainer" style="width:100%;height:400px;"></div>
+  <div id="emptyState">暂无数据。请先通过插件抓取，或导入 JSON 备份。</div>
+
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th>勾选</th>
+        <th>App</th>
+        <th>测试批次</th>
+        <th>Keyword</th>
+        <th>首刷排名 (Date)</th>
+        <th>最新排名 (Date)</th>
+        <th>抓取间隔</th>
+        <th>Rank Change</th>
+        <th>历史抓取明细</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
 
 <script>
-    let chart = echarts.init(document.getElementById('chartContainer'));
-    let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
-    let selectedItems = JSON.parse(localStorage.getItem('selected_items') || '[]');
+  const MASTER_KEY = 'aso_master_data';
+  const BACKUP_KEY = 'aso_master_data_backup_before_batch_v16';
+  const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v16';
+  const CHECKPOINTS = [0, 3, 7, 14, 28];
 
-    window.addEventListener('DOMContentLoaded', () => {
-        const params = new URLSearchParams(window.location.search);
-        const encodedData = params.get('data');
-        
-        if (encodedData) {
-            try {
-                const newData = JSON.parse(decodeURIComponent(encodedData));
-                let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-                
-                let map = new Map(masterData.map(i => [`${i.App}_${i.Keyword}_${i.Date}`, i]));
-                newData.forEach(i => map.set(`${i.App}_${i.Keyword}_${i.Date}`, i));
-                
-                localStorage.setItem('aso_master_data', JSON.stringify(Array.from(map.values())));
-                window.history.replaceState({}, document.title, window.location.pathname);
-            } catch (e) { console.error("数据解析失败", e); }
-        }
-        renderDashboard();
+  const chart = echarts.init(document.getElementById('chartContainer'));
+  let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
+  let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
+  let selectedItems = JSON.parse(localStorage.getItem('selected_items_v16') || '[]');
+
+  function parseDate(value) {
+    const match = String(value || '').match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function toDateKey(value) {
+    const date = value instanceof Date ? value : parseDate(value);
+    if (!date) return String(value || '');
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function compactDate(value) {
+    return toDateKey(value).replace(/\D/g, '');
+  }
+
+  function diffDays(later, earlier) {
+    const a = parseDate(later);
+    const b = parseDate(earlier);
+    if (!a || !b) return 0;
+    return Math.round((new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(b.getFullYear(), b.getMonth(), b.getDate())) / 86400000);
+  }
+
+  function inferCheckpoint(date, firstDate) {
+    const day = diffDays(date, firstDate);
+    return CHECKPOINTS.includes(day) ? day : 0;
+  }
+
+  function normalizeRecords(records) {
+    const list = Array.isArray(records) ? records : [];
+    const earliestByApp = {};
+
+    list.forEach(item => {
+      const app = String(item.App || '未命名 App').trim();
+      const date = toDateKey(item.Date);
+      if (!earliestByApp[app] || parseDate(date) < parseDate(earliestByApp[app])) {
+        earliestByApp[app] = date;
+      }
     });
 
-    function renderDashboard() {
-        const data = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        const allApps = [...new Set(data.map(d => d.App))];
-        
-        const appSelector = document.getElementById('appSelector');
-        if(appSelector) {
-            appSelector.innerHTML = allApps.map(app => `
-                <div class="app-btn ${selectedApps.includes(app) ? 'active' : ''}" onclick="toggleApp('${app}')">${app}</div>
-            `).join('');
-        }
+    return list.map(item => {
+      const app = String(item.App || '未命名 App').trim();
+      const date = toDateKey(item.Date);
+      const firstDate = earliestByApp[app] || date;
+      const batch = String(item.Batch || item.batchName || `T1-${compactDate(firstDate)}`).trim();
 
-        const filteredData = selectedApps.length > 0 ? data.filter(d => selectedApps.includes(d.App)) : data;
+      return {
+        ...item,
+        App: app,
+        Batch: batch,
+        Keyword: String(item.Keyword || '').trim(),
+        Rank: String(item.Rank || '').trim(),
+        Date: date,
+        Checkpoint: Number.isFinite(Number(item.Checkpoint))
+          ? Number(item.Checkpoint)
+          : inferCheckpoint(date, firstDate)
+      };
+    }).filter(item => item.Keyword && /^\d+$/.test(item.Rank));
+  }
 
-        // 按 App + Keyword 分组
-        const keywordMap = {};
-        filteredData.forEach(item => {
-            const k = `${item.App}_${item.Keyword}`;
-            if (!keywordMap[k]) keywordMap[k] = [];
-            keywordMap[k].push(item);
-        });
+  function recordKey(item) {
+    return `${item.App}__${item.Batch}__${item.Keyword}__${item.Date}`;
+  }
 
-        const aggregatedRows = Object.keys(keywordMap).map(k => {
-            // 按日期升序排列
-            const records = keywordMap[k].sort((a, b) => new Date(a.Date) - new Date(b.Date));
-            const first = records[0];
-            const last = records[records.length - 1];
-            
-            // 自动计算间隔天数
-            const d1 = new Date(first.Date);
-            const d2 = new Date(last.Date);
-            const diffDays = Math.round(Math.abs(d2 - d1) / (1000 * 60 * 60 * 24));
+  function itemKey(item) {
+    return `${item.App}__${item.Batch}__${item.Keyword}`;
+  }
 
-            let intervalStr = "-";
-            if (records.length > 1) {
-                intervalStr = `<b>+${diffDays}天</b> (${last.Date})`;
-            } else {
-                intervalStr = `<span style="color:#a0aec0;">单次抓取</span>`;
-            }
+  function saveMasterData(records) {
+    localStorage.setItem(MASTER_KEY, JSON.stringify(normalizeRecords(records)));
+  }
 
-            // Rank Change 计算 (排名数字越小越好)
-            const firstRank = parseInt(first.Rank);
-            const lastRank = parseInt(last.Rank);
-            const diff = firstRank - lastRank;
-            
-            let changeHtml = '-';
-            if (records.length > 1) {
-                if (diff > 0) changeHtml = `<span class="up">↑ ${diff}</span>`;
-                else if (diff < 0) changeHtml = `<span class="down">↓ ${Math.abs(diff)}</span>`;
-                else changeHtml = `<span style="color:#718096;">- 0</span>`;
-            }
+  function migrateExistingData() {
+    const raw = localStorage.getItem(MASTER_KEY) || '[]';
 
-            // 生成历史明细标签 (带按天删除功能)
-            const historyHtml = records.map(r => `
-                <span class="date-tag">
-                    ${r.Date}: <b>#${r.Rank}</b>
-                    <span class="del-day-btn" onclick="deleteSingleDate('${r.App}', '${r.Keyword}', '${r.Date}')" title="删除该天记录">✕</span>
-                </span>
-            `).join('');
-
-            return {
-                App: first.App,
-                Keyword: first.Keyword,
-                firstRankText: `#${first.Rank} (${first.Date})`,
-                lastRankText: `#${last.Rank} (${last.Date})`,
-                intervalStr: intervalStr,
-                changeHtml: changeHtml,
-                historyHtml: historyHtml
-            };
-        });
-
-        // 渲染表格
-        document.getElementById('tableBody').innerHTML = aggregatedRows.map(row => {
-            const key = `${row.App}-${row.Keyword}`;
-            const isChecked = selectedItems.includes(key);
-            
-            return `<tr>
-                <td><input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleItem('${key}')"></td>
-                <td><b>${row.Keyword}</b></td>
-                <td>${row.firstRankText}</td>
-                <td>${row.lastRankText}</td>
-                <td>${row.intervalStr}</td>
-                <td>${row.changeHtml}</td>
-                <td style="text-align:left;">${row.historyHtml}</td>
-                <td><button onclick="deleteKeywordGroup('${row.App}', '${row.Keyword}')" style="background:#feb2b2; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">删整词</button></td>
-            </tr>`;
-        }).join('');
-
-        updateChart(filteredData.filter(d => selectedItems.includes(`${d.App}-${d.Keyword}`)));
+    if (!localStorage.getItem(BACKUP_KEY)) {
+      localStorage.setItem(BACKUP_KEY, raw);
     }
 
-    // 删除某一天抓取的单条记录
-    function deleteSingleDate(app, keyword, date) {
-        if (!confirm(`确定要删除关键词【${keyword}】在 ${date} 的抓取数据吗？`)) return;
-        let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        masterData = masterData.filter(i => !(i.App === app && i.Keyword === keyword && i.Date === date));
-        localStorage.setItem('aso_master_data', JSON.stringify(masterData));
+    if (localStorage.getItem(MIGRATION_KEY) === '1') return;
+
+    let records = [];
+    try {
+      records = JSON.parse(raw);
+    } catch (error) {
+      console.error('旧数据解析失败，已保留原始备份：', error);
+      return;
+    }
+
+    saveMasterData(records);
+    localStorage.setItem(MIGRATION_KEY, '1');
+  }
+
+  function mergeIncomingData(newData) {
+    const masterData = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+    const incoming = normalizeRecords(newData);
+    const map = new Map(masterData.map(item => [recordKey(item), item]));
+    incoming.forEach(item => map.set(recordKey(item), item));
+    saveMasterData(Array.from(map.values()));
+  }
+
+  function encode(value) {
+    return encodeURIComponent(String(value || ''));
+  }
+
+  function decode(value) {
+    return decodeURIComponent(value || '');
+  }
+
+  function receiveUrlData() {
+    const params = new URLSearchParams(window.location.search);
+    const encodedData = params.get('data');
+    if (!encodedData) return;
+
+    try {
+      mergeIncomingData(JSON.parse(decodeURIComponent(encodedData)));
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch (error) {
+      console.error('数据解析失败：', error);
+      alert('看板收到数据，但解析失败。插件本地备份仍然保留。');
+    }
+  }
+
+  function renderSelectors(data) {
+    const allApps = [...new Set(data.map(item => item.App))].sort();
+    const appSelector = document.getElementById('appSelector');
+    appSelector.innerHTML = allApps.map(app => `
+      <button class="selector-btn app-btn ${selectedApps.includes(app) ? 'active' : ''}" data-value="${encode(app)}">${app}</button>
+    `).join('') || '<span class="hint">暂无 App</span>';
+
+    document.querySelectorAll('.app-btn').forEach(button => {
+      button.addEventListener('click', () => toggleApp(decode(button.dataset.value)));
+    });
+
+    const appFiltered = selectedApps.length ? data.filter(item => selectedApps.includes(item.App)) : data;
+    const allBatches = [...new Set(appFiltered.map(item => item.Batch))].sort();
+    selectedBatches = selectedBatches.filter(batch => allBatches.includes(batch));
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+
+    const batchSelector = document.getElementById('batchSelector');
+    batchSelector.innerHTML = allBatches.map(batch => `
+      <button class="selector-btn batch-btn ${selectedBatches.includes(batch) ? 'active' : ''}" data-value="${encode(batch)}">${batch}</button>
+    `).join('') || '<span class="hint">暂无批次</span>';
+
+    document.querySelectorAll('.batch-btn').forEach(button => {
+      button.addEventListener('click', () => toggleBatch(decode(button.dataset.value)));
+    });
+  }
+
+  function renderDashboard() {
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+    renderSelectors(data);
+
+    let filteredData = selectedApps.length ? data.filter(item => selectedApps.includes(item.App)) : data;
+    filteredData = selectedBatches.length ? filteredData.filter(item => selectedBatches.includes(item.Batch)) : filteredData;
+
+    const keywordMap = {};
+    filteredData.forEach(item => {
+      const key = itemKey(item);
+      if (!keywordMap[key]) keywordMap[key] = [];
+      keywordMap[key].push(item);
+    });
+
+    const rows = Object.values(keywordMap).map(records => {
+      records.sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+      const first = records[0];
+      const last = records[records.length - 1];
+      const interval = diffDays(last.Date, first.Date);
+      const firstRank = parseInt(first.Rank, 10);
+      const lastRank = parseInt(last.Rank, 10);
+      const diff = firstRank - lastRank;
+
+      let changeHtml = '-';
+      if (records.length > 1) {
+        if (diff > 0) changeHtml = `<span class="up">↑ ${diff}</span>`;
+        else if (diff < 0) changeHtml = `<span class="down">↓ ${Math.abs(diff)}</span>`;
+        else changeHtml = '<span style="color:#718096;">- 0</span>';
+      }
+
+      return {
+        App: first.App,
+        Batch: first.Batch,
+        Keyword: first.Keyword,
+        first,
+        last,
+        records,
+        interval,
+        changeHtml
+      };
+    }).sort((a, b) => `${a.App}${a.Batch}${a.Keyword}`.localeCompare(`${b.App}${b.Batch}${b.Keyword}`));
+
+    const table = document.getElementById('dataTable');
+    const empty = document.getElementById('emptyState');
+    table.style.display = rows.length ? 'table' : 'none';
+    empty.style.display = rows.length ? 'none' : 'block';
+
+    document.getElementById('tableBody').innerHTML = rows.map(row => {
+      const key = itemKey(row);
+      const history = row.records.map(record => `
+        <span class="date-tag">
+          ${record.Date}: <b>#${record.Rank}</b>
+          <span class="checkpoint">D${record.Checkpoint || 0}</span>
+          <span class="del-day-btn"
+            data-app="${encode(record.App)}"
+            data-batch="${encode(record.Batch)}"
+            data-keyword="${encode(record.Keyword)}"
+            data-date="${encode(record.Date)}"
+            title="删除该天记录">✕</span>
+        </span>
+      `).join('');
+
+      return `<tr>
+        <td><input class="item-check" type="checkbox" data-key="${encode(key)}" ${selectedItems.includes(key) ? 'checked' : ''}></td>
+        <td>${row.App}</td>
+        <td><span class="batch-tag">${row.Batch}</span></td>
+        <td><b>${row.Keyword}</b></td>
+        <td>#${row.first.Rank} (${row.first.Date})</td>
+        <td>#${row.last.Rank} (${row.last.Date})</td>
+        <td>${row.records.length > 1 ? `<b>+${row.interval}天</b>` : '<span style="color:#a0aec0;">单次抓取</span>'}</td>
+        <td>${row.changeHtml}</td>
+        <td style="text-align:left;">${history}</td>
+        <td><button class="delete-word-btn"
+          data-app="${encode(row.App)}"
+          data-batch="${encode(row.Batch)}"
+          data-keyword="${encode(row.Keyword)}">删整词</button></td>
+      </tr>`;
+    }).join('');
+
+    document.querySelectorAll('.item-check').forEach(input => {
+      input.addEventListener('change', () => toggleItem(decode(input.dataset.key)));
+    });
+
+    document.querySelectorAll('.del-day-btn').forEach(button => {
+      button.addEventListener('click', () => deleteSingleDate(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.keyword),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.delete-word-btn').forEach(button => {
+      button.addEventListener('click', () => deleteKeywordGroup(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.keyword)
+      ));
+    });
+
+    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))));
+  }
+
+  function deleteSingleDate(app, batch, keyword, date) {
+    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】在 ${date} 的记录吗？`)) return;
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword && item.Date === date));
+    saveMasterData(data);
+    renderDashboard();
+  }
+
+  function deleteKeywordGroup(app, batch, keyword) {
+    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】的全部历史吗？`)) return;
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword));
+    saveMasterData(data);
+    selectedItems = selectedItems.filter(key => key !== `${app}__${batch}__${keyword}`);
+    localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+    renderDashboard();
+  }
+
+  function toggleApp(app) {
+    selectedApps = selectedApps.includes(app)
+      ? selectedApps.filter(item => item !== app)
+      : [...selectedApps, app];
+    selectedBatches = [];
+    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+    renderDashboard();
+  }
+
+  function toggleBatch(batch) {
+    selectedBatches = selectedBatches.includes(batch)
+      ? selectedBatches.filter(item => item !== batch)
+      : [...selectedBatches, batch];
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+    renderDashboard();
+  }
+
+  function toggleItem(key) {
+    selectedItems = selectedItems.includes(key)
+      ? selectedItems.filter(item => item !== key)
+      : [...selectedItems, key];
+    localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+    renderDashboard();
+  }
+
+  function updateChart(data) {
+    const dates = [...new Set(data.map(item => item.Date))].sort((a, b) => parseDate(a) - parseDate(b));
+    const seriesMap = data.reduce((acc, item) => {
+      const key = itemKey(item);
+      if (!acc[key]) {
+        acc[key] = {
+          name: `${item.App} · ${item.Batch} · ${item.Keyword}`,
+          type: 'line',
+          connectNulls: false,
+          data: new Array(dates.length).fill(null)
+        };
+      }
+      const index = dates.indexOf(item.Date);
+      if (index !== -1) acc[key].data[index] = parseInt(item.Rank, 10);
+      return acc;
+    }, {});
+
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { type: 'scroll', show: true },
+      xAxis: { type: 'category', data: dates },
+      yAxis: { type: 'value', inverse: true, name: '排名' },
+      series: Object.values(seriesMap)
+    }, true);
+  }
+
+  function exportData() {
+    const payload = {
+      version: '1.6',
+      exportedAt: new Date().toISOString(),
+      data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `aso-dashboard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const incoming = Array.isArray(parsed) ? parsed : parsed.data;
+        if (!Array.isArray(incoming)) throw new Error('文件中没有有效数据数组。');
+        mergeIncomingData(incoming);
         renderDashboard();
-    }
+        alert('导入完成。原数据未删除，重复记录已按 App + 批次 + 关键词 + 日期合并。');
+      } catch (error) {
+        alert(`导入失败：${error.message}`);
+      }
+    };
+    reader.readAsText(file);
+  }
 
-    // 删除该关键词的全部历史
-    function deleteKeywordGroup(app, keyword) {
-        if (!confirm(`确定要彻底删除【${keyword}】的所有历史数据吗？`)) return;
-        let masterData = JSON.parse(localStorage.getItem('aso_master_data') || '[]');
-        masterData = masterData.filter(i => !(i.App === app && i.Keyword === keyword));
-        localStorage.setItem('aso_master_data', JSON.stringify(masterData));
-        renderDashboard();
-    }
+  window.addEventListener('DOMContentLoaded', () => {
+    migrateExistingData();
+    receiveUrlData();
+    renderDashboard();
 
-    function toggleApp(app) {
-        if(selectedApps.includes(app)) selectedApps = selectedApps.filter(a => a !== app);
-        else selectedApps.push(app);
-        localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
-        renderDashboard();
-    }
+    document.getElementById('exportBtn').addEventListener('click', exportData);
+    document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change', event => {
+      const file = event.target.files?.[0];
+      if (file) importData(file);
+      event.target.value = '';
+    });
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      if (!confirm('确定清空全部 ASO 看板数据吗？建议先点击“导出数据备份”。')) return;
+      localStorage.removeItem(MASTER_KEY);
+      localStorage.removeItem('selected_apps');
+      localStorage.removeItem('selected_batches');
+      localStorage.removeItem('selected_items_v16');
+      selectedApps = [];
+      selectedBatches = [];
+      selectedItems = [];
+      renderDashboard();
+    });
+  });
 
-    function toggleItem(key) {
-        if(selectedItems.includes(key)) selectedItems = selectedItems.filter(k => k !== key);
-        else selectedItems.push(key);
-        localStorage.setItem('selected_items', JSON.stringify(selectedItems));
-        renderDashboard();
-    }
-
-    function updateChart(data) {
-        const dates = [...new Set(data.map(d => d.Date))].sort((a, b) => new Date(a) - new Date(b));
-        const seriesMap = data.reduce((acc, curr) => {
-            let key = curr.Keyword; 
-            if (!acc[key]) acc[key] = { name: key, type: 'line', data: new Array(dates.length).fill(null) };
-            let idx = dates.indexOf(curr.Date);
-            if (idx !== -1) acc[key].data[idx] = parseInt(curr.Rank);
-            return acc;
-        }, {});
-
-        chart.setOption({
-            tooltip: { trigger: 'axis' },
-            legend: { type: 'scroll', show: true },
-            xAxis: { type: 'category', data: dates },
-            yAxis: { type: 'value', inverse: true, name: '排名' },
-            series: Object.values(seriesMap)
-        }, true);
-    }
+  window.addEventListener('resize', () => chart.resize());
 </script>
 </body>
 </html>
