@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板 v1.9</title>
+  <title>ASO 动态监控看板 v1.10</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -35,6 +35,16 @@
     .date-tag { display: inline-block; background: #edf2f7; padding: 3px 7px; border-radius: 4px; margin: 2px; font-size: 12px; }
     .checkpoint { color: #718096; font-size: 10px; margin-left: 3px; }
     .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
+    .note-day-btn { border: 0; background: transparent; cursor: pointer; margin-left: 3px; padding: 0 2px; font-size: 12px; }
+    .note-day-btn:hover { transform: scale(1.08); }
+    .note-cell { min-width: 220px; text-align: left; }
+    .note-card { display: flex; gap: 6px; align-items: flex-start; margin: 3px 0; padding: 6px 8px; border-radius: 6px; background: #fffaf0; border: 1px solid #fbd38d; }
+    .note-date { flex: 0 0 auto; color: #9c4221; font-size: 11px; font-weight: 700; }
+    .note-text { flex: 1; white-space: pre-wrap; word-break: break-word; color: #744210; font-size: 12px; }
+    .note-edit-btn, .note-delete-btn, .note-add-btn { border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; padding: 3px 6px; }
+    .note-edit-btn, .note-add-btn { background: #feebc8; color: #9c4221; }
+    .note-delete-btn { background: #fed7d7; color: #c53030; }
+    .note-empty { color: #a0aec0; font-size: 12px; }
     .delete-word-btn { background: #feb2b2; border: 0; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
     .batch-tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e6fffa; color: #276749; font-size: 12px; white-space: nowrap; }
     #emptyState { display: none; padding: 30px; text-align: center; color: #718096; background: #fff; border: 1px dashed #cbd5e0; }
@@ -68,7 +78,7 @@
     <div class="selector-title">测试批次筛选</div>
     <div id="batchSelector" class="selector"></div>
 
-    <div class="hint">App 会按名称第一个空格前的内容自动分组，例如“01 LG”和“01 screen mirror”归入“01”；选择分组后再选择 App。导出当前筛选会使用分组、App 和测试批次条件。</div>
+    <div class="hint">App 会按名称第一个空格前的内容自动分组。历史日期旁的 📝 可为该 App／批次／日期添加备注；备注会显示在表格、折线图和 Excel 中。</div>
   </div>
 
   <div id="chartContainer" style="width:100%;height:400px;"></div>
@@ -86,6 +96,7 @@
         <th>抓取间隔</th>
         <th>Rank Change</th>
         <th>历史抓取明细</th>
+        <th>备注</th>
         <th>操作</th>
       </tr>
     </thead>
@@ -96,6 +107,7 @@
   const MASTER_KEY = 'aso_master_data';
   const BACKUP_KEY = 'aso_master_data_backup_before_excel_v17';
   const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v17';
+  const NOTES_KEY = 'aso_notes_v110';
   const CHECKPOINTS = [0, 3, 7, 14, 28];
 
   const chart = echarts.init(document.getElementById('chartContainer'));
@@ -233,6 +245,96 @@
     return decodeURIComponent(value || '');
   }
 
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function noteKey(app, batch, date) {
+    return `${String(app || '').trim()}__${String(batch || '').trim()}__${toDateKey(date)}`;
+  }
+
+  function getNotesMap() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+      console.error('备注数据解析失败：', error);
+      return {};
+    }
+  }
+
+  function saveNotesMap(notes) {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(notes || {}));
+  }
+
+  function getNote(app, batch, date) {
+    return getNotesMap()[noteKey(app, batch, date)] || null;
+  }
+
+  function getNotesForBatch(app, batch, allowedDates = null) {
+    const dateSet = allowedDates ? new Set(allowedDates.map(toDateKey)) : null;
+    return Object.values(getNotesMap())
+      .filter(note => note.App === app && note.Batch === batch && (!dateSet || dateSet.has(toDateKey(note.Date))))
+      .sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+  }
+
+  function editNote(app, batch, date) {
+    const notes = getNotesMap();
+    const key = noteKey(app, batch, date);
+    const current = notes[key]?.Text || '';
+    const input = prompt(`为【${app}｜${batch}】在 ${toDateKey(date)} 添加备注：`, current);
+    if (input === null) return;
+
+    const text = input.trim();
+    if (!text) {
+      if (current && confirm('备注内容为空，是否删除原备注？')) {
+        delete notes[key];
+        saveNotesMap(notes);
+        renderDashboard();
+      }
+      return;
+    }
+
+    notes[key] = {
+      App: app,
+      Batch: batch,
+      Date: toDateKey(date),
+      Text: text,
+      UpdatedAt: new Date().toISOString()
+    };
+    saveNotesMap(notes);
+    renderDashboard();
+  }
+
+  function deleteNote(app, batch, date) {
+    if (!confirm(`确定删除【${app}｜${batch}】在 ${toDateKey(date)} 的备注吗？`)) return;
+    const notes = getNotesMap();
+    delete notes[noteKey(app, batch, date)];
+    saveNotesMap(notes);
+    renderDashboard();
+  }
+
+  function mergeIncomingNotes(incomingNotes) {
+    if (!Array.isArray(incomingNotes)) return;
+    const notes = getNotesMap();
+    incomingNotes.forEach(note => {
+      if (!note || !note.App || !note.Batch || !note.Date || !String(note.Text || '').trim()) return;
+      notes[noteKey(note.App, note.Batch, note.Date)] = {
+        App: String(note.App).trim(),
+        Batch: String(note.Batch).trim(),
+        Date: toDateKey(note.Date),
+        Text: String(note.Text).trim(),
+        UpdatedAt: note.UpdatedAt || new Date().toISOString()
+      };
+    });
+    saveNotesMap(notes);
+  }
+
   function receiveUrlData() {
     const params = new URLSearchParams(window.location.search);
     const encodedData = params.get('data');
@@ -362,18 +464,37 @@
 
     document.getElementById('tableBody').innerHTML = rows.map(row => {
       const key = itemKey(row);
-      const history = row.records.map(record => `
+      const history = row.records.map(record => {
+        const note = getNote(record.App, record.Batch, record.Date);
+        return `
         <span class="date-tag">
           ${record.Date}: <b>#${record.Rank}</b>
           <span class="checkpoint">${record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`}</span>
+          <button class="note-day-btn"
+            data-app="${encode(record.App)}"
+            data-batch="${encode(record.Batch)}"
+            data-date="${encode(record.Date)}"
+            title="${note ? '编辑备注' : '添加备注'}">📝</button>
           <span class="del-day-btn"
             data-app="${encode(record.App)}"
             data-batch="${encode(record.Batch)}"
             data-keyword="${encode(record.Keyword)}"
             data-date="${encode(record.Date)}"
             title="删除该天记录">✕</span>
-        </span>
-      `).join('');
+        </span>`;
+      }).join('');
+
+      const uniqueDates = [...new Set(row.records.map(record => record.Date))];
+      const rowNotes = getNotesForBatch(row.App, row.Batch, uniqueDates);
+      const notesHtml = rowNotes.length
+        ? rowNotes.map(note => `
+          <div class="note-card">
+            <span class="note-date">${escapeHtml(note.Date)}</span>
+            <span class="note-text">${escapeHtml(note.Text)}</span>
+            <button class="note-edit-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">编辑</button>
+            <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">删除</button>
+          </div>`).join('')
+        : `<span class="note-empty">暂无备注</span><br><button class="note-add-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.last.Date)}">＋ 给最新日期加备注</button>`;
 
       return `<tr>
         <td><input class="item-check" type="checkbox" data-key="${encode(key)}" ${selectedItems.includes(key) ? 'checked' : ''}></td>
@@ -385,6 +506,7 @@
         <td>${row.records.length > 1 ? `<b>+${row.interval}天</b>` : '<span style="color:#a0aec0;">单次抓取</span>'}</td>
         <td>${row.changeHtml}</td>
         <td style="text-align:left;">${history}</td>
+        <td class="note-cell">${notesHtml}</td>
         <td><button class="delete-word-btn"
           data-app="${encode(row.App)}"
           data-batch="${encode(row.Batch)}"
@@ -401,6 +523,22 @@
         decode(button.dataset.app),
         decode(button.dataset.batch),
         decode(button.dataset.keyword),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.note-day-btn, .note-edit-btn, .note-add-btn').forEach(button => {
+      button.addEventListener('click', () => editNote(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.note-delete-btn').forEach(button => {
+      button.addEventListener('click', () => deleteNote(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
         decode(button.dataset.date)
       ));
     });
@@ -467,20 +605,56 @@
       return acc;
     }, {});
 
+    const notes = [];
+    const seenNotes = new Set();
+    data.forEach(item => {
+      const note = getNote(item.App, item.Batch, item.Date);
+      const key = noteKey(item.App, item.Batch, item.Date);
+      if (note && !seenNotes.has(key)) {
+        seenNotes.add(key);
+        notes.push({
+          value: [item.Date, 1],
+          App: item.App,
+          Batch: item.Batch,
+          Date: item.Date,
+          Text: note.Text
+        });
+      }
+    });
+
+    const series = Object.values(seriesMap);
+    if (notes.length) {
+      series.push({
+        name: '备注',
+        type: 'scatter',
+        symbol: 'pin',
+        symbolSize: 42,
+        z: 20,
+        itemStyle: { color: '#ed8936' },
+        label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
+        tooltip: {
+          trigger: 'item',
+          formatter: params => `<b>${escapeHtml(params.data.Date)}</b><br>${escapeHtml(params.data.App)}｜${escapeHtml(params.data.Batch)}<br>${escapeHtml(params.data.Text)}`
+        },
+        data: notes
+      });
+    }
+
     chart.setOption({
       tooltip: { trigger: 'axis' },
       legend: { type: 'scroll', show: true },
       xAxis: { type: 'category', data: dates },
-      yAxis: { type: 'value', inverse: true, name: '排名' },
-      series: Object.values(seriesMap)
+      yAxis: { type: 'value', inverse: true, name: '排名', min: 1 },
+      series
     }, true);
   }
 
   function exportData() {
     const payload = {
-      version: '1.8',
+      version: '1.10',
       exportedAt: new Date().toISOString(),
-      data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+      data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')),
+      notes: Object.values(getNotesMap())
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -595,7 +769,23 @@
         minInterval: 1,
         splitLine: { lineStyle: { color: '#e2e8f0' } }
       },
-      series: Object.values(keywordMap)
+      series: [
+        ...Object.values(keywordMap),
+        ...(() => {
+          const batchNotes = getNotesForBatch(app, batch, dates);
+          if (!batchNotes.length) return [];
+          return [{
+            name: '备注',
+            type: 'scatter',
+            symbol: 'pin',
+            symbolSize: 42,
+            z: 20,
+            itemStyle: { color: '#ed8936' },
+            label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
+            data: batchNotes.map(note => ({ value: [note.Date, 1], Text: note.Text }))
+          }];
+        })()
+      ]
     });
 
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -668,7 +858,7 @@
         views: [{ state: 'frozen', ySplit: 4 }]
       });
 
-      summarySheet.mergeCells('A1:J1');
+      summarySheet.mergeCells('A1:K1');
       const titleCell = summarySheet.getCell('A1');
       titleCell.value = 'ASO 关键词排名汇总';
       titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -676,13 +866,13 @@
       titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
       summarySheet.getRow(1).height = 30;
 
-      summarySheet.mergeCells('A2:J2');
+      summarySheet.mergeCells('A2:K2');
       const infoCell = summarySheet.getCell('A2');
       infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜节点：D0、D3、D7、D14、D28`;
       infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
       infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-      const headers = ['App', '测试批次', 'Keyword', 'D0', 'D3', 'D7', 'D14', 'D28', '最新排名', 'Rank Change'];
+      const headers = ['App', '测试批次', 'Keyword', 'D0', 'D3', 'D7', 'D14', 'D28', '最新排名', 'Rank Change', '备注'];
       const headerRow = summarySheet.getRow(4);
       headerRow.values = headers;
       headerRow.height = 26;
@@ -714,7 +904,10 @@
           formatRankPoint(checkpointRecord(14)),
           formatRankPoint(checkpointRecord(28)),
           formatRankPoint(last),
-          rankChange
+          rankChange,
+          getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
+            .map(note => `${note.Date}：${note.Text}`)
+            .join('\n')
         ]);
 
         row.height = 34;
@@ -753,9 +946,10 @@
         { key: 'd14', width: 21 },
         { key: 'd28', width: 21 },
         { key: 'latest', width: 22 },
-        { key: 'change', width: 15 }
+        { key: 'change', width: 15 },
+        { key: 'notes', width: 38 }
       ];
-      summarySheet.autoFilter = `A4:J${Math.max(4, summarySheet.rowCount)}`;
+      summarySheet.autoFilter = `A4:K${Math.max(4, summarySheet.rowCount)}`;
 
       const trendSheet = workbook.addWorksheet('排名趋势图', {
         properties: { defaultRowHeight: 18 },
@@ -827,8 +1021,9 @@
         const incoming = Array.isArray(parsed) ? parsed : parsed.data;
         if (!Array.isArray(incoming)) throw new Error('文件中没有有效数据数组。');
         mergeIncomingData(incoming);
+        if (!Array.isArray(parsed) && Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
         renderDashboard();
-        alert('导入完成。原数据未删除，重复记录已按 App + 批次 + 关键词 + 日期合并。');
+        alert('导入完成。排名和备注均已合并，原数据未删除。');
       } catch (error) {
         alert(`导入失败：${error.message}`);
       }
@@ -883,6 +1078,7 @@
       localStorage.removeItem('selected_apps');
       localStorage.removeItem('selected_batches');
       localStorage.removeItem('selected_items_v16');
+      localStorage.removeItem(NOTES_KEY);
       selectedApps = [];
       selectedBatches = [];
       selectedItems = [];
