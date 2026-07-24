@@ -843,7 +843,6 @@
 
     document.getElementById('appGroupSelect').addEventListener('change', event => {
       selectedAppGroup = event.target.value ? decode(event.target.value) : '';
-      selectedAppGroup = '';
       selectedApps = [];
       selectedBatches = [];
       if (selectedAppGroup) localStorage.setItem('selected_app_group', selectedAppGroup);
