@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.0.0</title>
+  <title>ASO 数据中心 v2.1.0</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -137,6 +137,11 @@
     .storage-row:last-child { border-bottom:0; }
     .storage-key { font-weight:700; }
     .storage-note { font-size:12px; color:var(--muted); }
+    .ios-chart-panel { margin:16px 0; }
+    .ios-chart-empty { min-height:280px; display:grid; place-items:center; color:#718096; border:1px dashed #cbd5e0; border-radius:8px; background:#f8fafc; text-align:center; padding:24px; }
+    .ios-checkbox { width:16px; height:16px; cursor:pointer; accent-color:#4299e1; }
+    .ios-selection-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; }
+    .ios-selection-note { color:#718096; font-size:12px; }
     .hidden { display:none !important; }
     @media (max-width:1200px) { .cards { grid-template-columns:repeat(3,1fr); } .two-col { grid-template-columns:1fr; } }
     @media (max-width:760px) { .topbar { align-items:flex-start; flex-direction:column; } .cards { grid-template-columns:repeat(2,1fr); } .page-wrap { padding:12px; } .detail-grid { grid-template-columns:repeat(2,1fr); } }
@@ -159,7 +164,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.0.0</span>
+      <span class="version-badge">v2.1.0</span>
     </header>
 
     <main class="page-wrap">
@@ -234,6 +239,16 @@
             <div class="filter-field"><label for="iosKeywordInput">结果关键词</label><input id="iosKeywordInput" class="text-input" placeholder="搜索关键词"></div>
           </div>
           <div class="summary-line" id="iosSummaryLine"></div>
+          <div class="ios-selection-actions">
+            <button id="iosClearSelectionBtn" class="action-btn">清除勾选</button>
+            <button id="iosClearCurrentBtn" class="action-btn danger">清空当前筛选数据</button>
+            <span id="iosSelectionNote" class="ios-selection-note">勾选关键词后，下方折线图会显示跨日期排名趋势。</span>
+          </div>
+        </div>
+        <div class="panel ios-chart-panel">
+          <div class="panel-title"><h3>勾选关键词排名趋势</h3><span class="version-badge" id="iosSelectedBadge">已选 0</span></div>
+          <div id="iosOverviewTrendEmpty" class="ios-chart-empty">请在下方表格勾选 1–8 个关键词。折线图按实际抓取日期展示排名，排名数字越小越好。</div>
+          <div id="iosOverviewTrendChart" class="hidden" style="width:100%;height:360px;"></div>
         </div>
         <div id="iosEmpty" class="empty-box">暂无七麦数据。可从“数据管理”导入插件导出的 14 天历史 JSON；插件同步接入后也会自动进入这里。</div>
         <div id="iosTableWrap" class="table-wrap hidden">
@@ -294,10 +309,13 @@
   const CHECKPOINTS = [0, 3, 7, 14, 28];
   const QIMAI_KEY = 'aso_ios_qimai_snapshots_v200';
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
-  const DASHBOARD_VERSION = '2.0.0';
+  const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
+  const MAX_IOS_TREND_SERIES = 8;
+  const DASHBOARD_VERSION = '2.1.0';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
+  let iosOverviewTrendChart = null;
   let activePage = localStorage.getItem('aso_active_page_v200') || 'overviewSection';
   let iosCategory = localStorage.getItem('aso_ios_category_v200') || 'rank_changed';
   const iosFilters = {
@@ -312,6 +330,7 @@
   let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
   let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
   let selectedItems = JSON.parse(localStorage.getItem('selected_items_v16') || '[]');
+  let selectedIosKeywords = new Set(safeJsonParse(localStorage.getItem(IOS_SELECTION_KEY) || '[]', []));
 
   function parseDate(value) {
     const match = String(value || '').match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
@@ -327,6 +346,13 @@
     const m = String(date.getMonth() + 1).padStart(2, '0');
     const d = String(date.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
+  }
+
+  function addDateDays(value, days) {
+    const date = value instanceof Date ? new Date(value) : parseDate(value);
+    if (!date) return '';
+    date.setDate(date.getDate() + Number(days || 0));
+    return toDateKey(date);
   }
 
   function compactDate(value) {
@@ -1325,8 +1351,9 @@
       appStoreId: String(row.appStoreId || snapshot.appStoreId || '').trim(),
       batch: String(row.batch || snapshot.batch || '未命名批次').trim(),
       country: String(row.country || snapshot.country || '').trim().toUpperCase(),
-      date: toDateKey(row.currentDate || snapshot.date),
-      compareDate: toDateKey(row.compareDate || ''),
+      date: toDateKey(snapshot.date || row.currentDate),
+      compareDate: toDateKey(snapshot.compareDate || row.compareDate || addDateDays(snapshot.date, -1)),
+      day: numberOrNull(snapshot.day || row.autoDay),
       category,
       keyword: String(row.keyword || '').trim(),
       keywordNormalized: String(row.keywordNormalized || row.keyword || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase(),
@@ -1344,8 +1371,12 @@
 
   function normalizeQimaiSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return null;
-    const date = toDateKey(snapshot.date || snapshot.currentDate || snapshot.config?.currentDate);
+    const changedSource = Array.isArray(snapshot.changedResults) ? snapshot.changedResults : [];
+    const newSource = Array.isArray(snapshot.newEntryResults) ? snapshot.newEntryResults : [];
+    const firstRow = changedSource[0] || newSource[0] || {};
+    const date = toDateKey(snapshot.date || snapshot.currentDate || snapshot.config?.currentDate || firstRow.currentDate);
     if (!date) return null;
+    const compareDate = toDateKey(snapshot.compareDate || snapshot.config?.compareDate || firstRow.compareDate || addDateDays(date, -1));
     const base = {
       id: snapshot.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       taskId: String(snapshot.taskId || '').trim(),
@@ -1355,12 +1386,11 @@
       country: String(snapshot.country || snapshot.config?.country || '').trim().toUpperCase(),
       day: numberOrNull(snapshot.day || snapshot.config?.autoDay),
       date,
+      compareDate,
       status: String(snapshot.status || 'success'),
       createdAt: snapshot.createdAt || new Date().toISOString(),
       failures: Array.isArray(snapshot.failures) ? snapshot.failures : []
     };
-    const changedSource = Array.isArray(snapshot.changedResults) ? snapshot.changedResults : [];
-    const newSource = Array.isArray(snapshot.newEntryResults) ? snapshot.newEntryResults : [];
     base.changedResults = changedSource.map(row => normalizeQimaiRow(row, base, 'rank_changed')).filter(Boolean);
     base.newEntryResults = newSource.map(row => normalizeQimaiRow(row, base, 'new_entry')).filter(Boolean);
     return base;
@@ -1379,6 +1409,7 @@
         batch: state.config?.batch,
         country: state.config?.country,
         date: state.config?.currentDate,
+        compareDate: state.config?.compareDate,
         day: state.config?.autoDay,
         status: state.status,
         changedResults: state.changedResults,
@@ -1527,6 +1558,131 @@
     return Number.isFinite(value) ? value.toLocaleString() : '—';
   }
 
+  function iosKeywordEntityKey(row) {
+    return [row.app, row.appStoreId, row.batch, row.country, row.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|');
+  }
+
+  function saveIosSelection() {
+    localStorage.setItem(IOS_SELECTION_KEY, JSON.stringify([...selectedIosKeywords]));
+  }
+
+  function getAllIosKeywordEntities() {
+    const snapshots = getQimaiSnapshots();
+    const rows = [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
+      .sort((a, b) => parseDate(b.date) - parseDate(a.date));
+    const map = new Map();
+    rows.forEach(row => {
+      const key = iosKeywordEntityKey(row);
+      if (!map.has(key)) map.set(key, row);
+    });
+    return map;
+  }
+
+  function pruneIosSelection() {
+    const validKeys = new Set(getAllIosKeywordEntities().keys());
+    const next = new Set([...selectedIosKeywords].filter(key => validKeys.has(key)));
+    if (next.size !== selectedIosKeywords.size) {
+      selectedIosKeywords = next;
+      saveIosSelection();
+    }
+  }
+
+  function renderIosOverviewTrend() {
+    pruneIosSelection();
+    const badge = document.getElementById('iosSelectedBadge');
+    const empty = document.getElementById('iosOverviewTrendEmpty');
+    const chartElement = document.getElementById('iosOverviewTrendChart');
+    const selectedKeys = [...selectedIosKeywords];
+    badge.textContent = `已选 ${selectedKeys.length}`;
+    document.getElementById('iosSelectionNote').textContent = selectedKeys.length
+      ? `已勾选 ${selectedKeys.length} 个关键词；折线图最多同时展示 ${MAX_IOS_TREND_SERIES} 条。`
+      : '勾选关键词后，下方折线图会显示跨日期排名趋势。';
+
+    if (!selectedKeys.length || !window.echarts) {
+      empty.classList.remove('hidden');
+      chartElement.classList.add('hidden');
+      if (iosOverviewTrendChart) iosOverviewTrendChart.clear();
+      return;
+    }
+
+    const entityMap = getAllIosKeywordEntities();
+    const snapshots = getQimaiSnapshots();
+    const selectedRows = selectedKeys.map(key => entityMap.get(key)).filter(Boolean).slice(0, MAX_IOS_TREND_SERIES);
+    const allDates = [...new Set(selectedRows.flatMap(row => getQimaiTimelineStats(snapshots, row).history.map(item => item.date)))]
+      .sort((a, b) => parseDate(a) - parseDate(b));
+    const duplicateNames = selectedRows.reduce((map, row) => map.set(row.keyword, (map.get(row.keyword) || 0) + 1), new Map());
+    const series = selectedRows.map(row => {
+      const stats = getQimaiTimelineStats(snapshots, row);
+      const ranks = {};
+      stats.history.forEach(item => {
+        if (!Number.isFinite(item.rank)) return;
+        if (!Number.isFinite(ranks[item.date]) || item.rank < ranks[item.date]) ranks[item.date] = item.rank;
+      });
+      const name = duplicateNames.get(row.keyword) > 1 ? `${row.keyword}｜${row.app}` : row.keyword;
+      return { name, type:'line', connectNulls:false, symbol:'circle', symbolSize:7, data:allDates.map(date => ranks[date] ?? null) };
+    });
+
+    empty.classList.add('hidden');
+    chartElement.classList.remove('hidden');
+    if (!iosOverviewTrendChart) iosOverviewTrendChart = echarts.init(chartElement);
+    iosOverviewTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ type:'scroll', top:0 },
+      grid:{ left:52, right:24, top:54, bottom:48, containLabel:true },
+      xAxis:{ type:'category', data:allDates, name:'抓取日期' },
+      yAxis:{ type:'value', inverse:true, min:1, name:'排名（越小越好）' },
+      series
+    }, true);
+    setTimeout(() => iosOverviewTrendChart.resize(), 30);
+  }
+
+  function qimaiRawRowMatchesFilters(row, snapshot) {
+    const normalized = normalizeQimaiRow(row, snapshot, iosCategory);
+    if (!normalized) return false;
+    if (iosFilters.app && normalized.app !== iosFilters.app) return false;
+    if (iosFilters.batch && normalized.batch !== iosFilters.batch) return false;
+    if (iosFilters.country && normalized.country !== iosFilters.country) return false;
+    if (iosFilters.date && normalized.date !== iosFilters.date) return false;
+    const sourceQuery = iosFilters.source.trim().toLowerCase();
+    if (sourceQuery && !normalized.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery))) return false;
+    const keywordQuery = iosFilters.keyword.trim().toLowerCase();
+    if (keywordQuery && !normalized.keyword.toLowerCase().includes(keywordQuery)) return false;
+    return true;
+  }
+
+  function clearCurrentIosView() {
+    const visibleRows = getFilteredQimaiRows();
+    if (!visibleRows.length) return alert('当前筛选范围没有可清空的数据。');
+    const categoryLabel = iosCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动';
+    const scope = [iosFilters.app || '全部 App', iosFilters.batch || '全部批次', iosFilters.country || '全部国家', iosFilters.date || '全部日期'].join('｜');
+    if (!confirm(`确定清空当前筛选数据吗？\n\n页面：${categoryLabel}\n范围：${scope}\n去重后可见：${visibleRows.length} 条\n\n另一分类和 ST 数据不会删除。建议先导出全部 JSON。`)) return;
+
+    const snapshots = getQimaiSnapshots();
+    const targetKeys = new Set(visibleRows.map(row => [row.app,row.appStoreId,row.batch,row.country,row.date,row.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|')));
+    let removedRaw = 0;
+    const next = snapshots.map(snapshot => {
+      const copy = { ...snapshot, changedResults:[...snapshot.changedResults], newEntryResults:[...snapshot.newEntryResults] };
+      const field = iosCategory === 'new_entry' ? 'newEntryResults' : 'changedResults';
+      const before = copy[field].length;
+      copy[field] = copy[field].filter(row => {
+        const normalized = normalizeQimaiRow(row, copy, iosCategory);
+        if (!normalized) return true;
+        const key = [normalized.app,normalized.appStoreId,normalized.batch,normalized.country,normalized.date,normalized.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|');
+        return !targetKeys.has(key);
+      });
+      removedRaw += before - copy[field].length;
+      return copy;
+    }).filter(snapshot => snapshot.changedResults.length || snapshot.newEntryResults.length || snapshot.status === 'zero_result');
+
+    saveQimaiSnapshots(next);
+    const removedKeys = new Set(visibleRows.map(iosKeywordEntityKey));
+    selectedIosKeywords = new Set([...selectedIosKeywords].filter(key => !removedKeys.has(key)));
+    saveIosSelection();
+    addSyncLog({ source:'qimai_ios', status:'success', message:`已清空当前筛选：${categoryLabel}，原始记录 ${removedRaw} 条。` });
+    renderIosDashboard();
+    alert(`已清空当前筛选数据，共删除 ${removedRaw} 条原始记录。`);
+  }
+
   function renderIosDashboard() {
     renderIosSelectors();
     document.querySelectorAll('[data-ios-category]').forEach(button => button.classList.toggle('active', button.dataset.iosCategory === iosCategory));
@@ -1546,12 +1702,19 @@
       '排序：结果数降序'
     ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
 
-    const headers = ['日期','App','批次','国家','关键词','来源词','当前排名', iosCategory === 'new_entry' ? '状态' : '排名变动','指数','结果数','流行度','首次发现','出现天数','最佳排名'];
-    document.getElementById('iosTableHead').innerHTML = `<tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr>`;
+    const headers = ['勾选','抓取日期','对比日期','App','批次','国家','关键词','来源词','当前排名', iosCategory === 'new_entry' ? '状态' : '排名变动','指数','结果数','流行度','首次发现','出现天数','最佳排名'];
+    const visibleKeys = rows.map(iosKeywordEntityKey);
+    const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every(key => selectedIosKeywords.has(key));
+    const someVisibleSelected = visibleKeys.some(key => selectedIosKeywords.has(key));
+    document.getElementById('iosTableHead').innerHTML = `<tr>${headers.map((header, index) => index === 0 ? `<th><input id="iosSelectAllVisible" class="ios-checkbox" type="checkbox" aria-label="全选当前筛选" ${allVisibleSelected ? 'checked' : ''}></th>` : `<th>${header}</th>`).join('')}</tr>`;
+    const selectAll = document.getElementById('iosSelectAllVisible');
+    if (selectAll) selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
     document.getElementById('iosTableBody').innerHTML = rows.slice(0, 1000).map((row, index) => {
       const stats = getQimaiTimelineStats(allSnapshots, row);
+      const entityKey = iosKeywordEntityKey(row);
       return `<tr>
-        <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.app)}</td><td><span class="batch-tag">${escapeHtml(row.batch)}</span></td><td>${escapeHtml(row.country || '—')}</td>
+        <td><input class="ios-checkbox ios-row-select" type="checkbox" data-row-index="${index}" ${selectedIosKeywords.has(entityKey) ? 'checked' : ''}></td>
+        <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.compareDate || addDateDays(row.date,-1) || '—')}</td><td>${escapeHtml(row.app)}</td><td><span class="batch-tag">${escapeHtml(row.batch)}</span></td><td>${escapeHtml(row.country || '—')}</td>
         <td><button class="keyword-link ios-keyword-detail" data-row-index="${index}">${escapeHtml(row.keyword)}</button></td>
         <td class="source-list">${escapeHtml(row.sourceKeywords.join(', '))}</td><td>${displayNumber(row.rank)}</td>
         <td class="${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(row.rankChangeText || '—')}</td>
@@ -1560,6 +1723,19 @@
       </tr>`;
     }).join('');
     document.querySelectorAll('.ios-keyword-detail').forEach(button => button.addEventListener('click', () => openKeywordDrawer(rows[Number(button.dataset.rowIndex)])));
+    document.querySelectorAll('.ios-row-select').forEach(input => input.addEventListener('change', () => {
+      const row = rows[Number(input.dataset.rowIndex)];
+      const key = iosKeywordEntityKey(row);
+      if (input.checked) selectedIosKeywords.add(key); else selectedIosKeywords.delete(key);
+      saveIosSelection();
+      renderIosDashboard();
+    }));
+    if (selectAll) selectAll.addEventListener('change', () => {
+      visibleKeys.forEach(key => { if (selectAll.checked) selectedIosKeywords.add(key); else selectedIosKeywords.delete(key); });
+      saveIosSelection();
+      renderIosDashboard();
+    });
+    renderIosOverviewTrend();
     renderOverview();
     renderStorageSummary();
   }
@@ -1765,6 +1941,8 @@
     });
     document.getElementById('iosSourceInput').addEventListener('input', event => { iosFilters.source = event.target.value; renderIosDashboard(); });
     document.getElementById('iosKeywordInput').addEventListener('input', event => { iosFilters.keyword = event.target.value; renderIosDashboard(); });
+    document.getElementById('iosClearSelectionBtn').addEventListener('click', () => { selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); });
+    document.getElementById('iosClearCurrentBtn').addEventListener('click', clearCurrentIosView);
     document.getElementById('drawerCloseBtn').addEventListener('click', closeKeywordDrawer);
     document.getElementById('keywordDrawerMask').addEventListener('click', event => { if (event.target.id === 'keywordDrawerMask') closeKeywordDrawer(); });
     document.addEventListener('keydown', event => { if (event.key === 'Escape') closeKeywordDrawer(); });
@@ -1774,7 +1952,7 @@
     document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
     document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
     document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
-    document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
+    document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
     document.getElementById('clearSyncLogsBtn').addEventListener('click', () => { if(!confirm('确定清空同步日志吗？关键词数据不会删除。'))return; localStorage.removeItem(SYNC_LOG_KEY); renderOverview(); renderStorageSummary(); });
   }
 
@@ -1840,7 +2018,7 @@
     });
   });
 
-  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); });
+  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); });
 </script>
 </body>
 </html>
