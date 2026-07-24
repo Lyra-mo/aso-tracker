@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板 v1.8</title>
+  <title>ASO 动态监控看板 v1.9</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -18,6 +18,11 @@
     .clear-btn { background: #feb2b2; color: #742a2a; }
     .selector-title { margin-top: 12px; font-size: 13px; font-weight: 700; color: #4a5568; }
     .selector { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .filter-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; align-items: end; }
+    .filter-field { min-width: 180px; }
+    .filter-field label { display: block; margin-bottom: 5px; font-size: 12px; color: #718096; }
+    .filter-select { width: 100%; min-width: 180px; padding: 8px 34px 8px 10px; border: 1px solid #cbd5e0; border-radius: 6px; background: #fff; color: #2d3748; cursor: pointer; }
+    .filter-select:focus { outline: none; border-color: #4299e1; box-shadow: 0 0 0 2px rgba(66,153,225,.15); }
     .selector-btn { border: 1px solid #cbd5e0; padding: 7px 13px; border-radius: 999px; cursor: pointer; background: #edf2f7; }
     .selector-btn.active { background: #4299e1; color: #fff; border-color: #3182ce; }
     .batch-btn.active { background: #38a169; border-color: #2f855a; }
@@ -49,12 +54,21 @@
     </div>
 
     <div class="selector-title">App 筛选</div>
-    <div id="appSelector" class="selector"></div>
+    <div class="filter-row">
+      <div class="filter-field">
+        <label for="appGroupSelect">分组</label>
+        <select id="appGroupSelect" class="filter-select"></select>
+      </div>
+      <div class="filter-field">
+        <label for="appSelect">App 名称</label>
+        <select id="appSelect" class="filter-select"></select>
+      </div>
+    </div>
 
     <div class="selector-title">测试批次筛选</div>
     <div id="batchSelector" class="selector"></div>
 
-    <div class="hint">“导出当前筛选”只导出当前 App／测试批次筛选后表格中显示的数据；“导出全部”导出所有 App 和批次。勾选框只控制网页折线图，不影响 Excel 导出。</div>
+    <div class="hint">App 会按名称第一个空格前的内容自动分组，例如“01 LG”和“01 screen mirror”归入“01”；选择分组后再选择 App。导出当前筛选会使用分组、App 和测试批次条件。</div>
   </div>
 
   <div id="chartContainer" style="width:100%;height:400px;"></div>
@@ -85,6 +99,7 @@
   const CHECKPOINTS = [0, 3, 7, 14, 28];
 
   const chart = echarts.init(document.getElementById('chartContainer'));
+  let selectedAppGroup = localStorage.getItem('selected_app_group') || '';
   let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
   let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
   let selectedItems = JSON.parse(localStorage.getItem('selected_items_v16') || '[]');
@@ -232,18 +247,57 @@
     }
   }
 
+  function getAppGroup(appName) {
+    const app = String(appName || '').trim();
+    if (!app) return '其他';
+    return app.split(/\s+/)[0] || '其他';
+  }
+
+  function applyGroupFilter(records) {
+    return selectedAppGroup
+      ? records.filter(item => getAppGroup(item.App) === selectedAppGroup)
+      : records;
+  }
+
   function renderSelectors(data) {
     const allApps = [...new Set(data.map(item => item.App))].sort();
-    const appSelector = document.getElementById('appSelector');
-    appSelector.innerHTML = allApps.map(app => `
-      <button class="selector-btn app-btn ${selectedApps.includes(app) ? 'active' : ''}" data-value="${encode(app)}">${app}</button>
-    `).join('') || '<span class="hint">暂无 App</span>';
+    const allGroups = [...new Set(allApps.map(getAppGroup))].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
 
-    document.querySelectorAll('.app-btn').forEach(button => {
-      button.addEventListener('click', () => toggleApp(decode(button.dataset.value)));
-    });
+    if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) {
+      selectedAppGroup = '';
+      localStorage.removeItem('selected_app_group');
+    }
 
-    const appFiltered = selectedApps.length ? data.filter(item => selectedApps.includes(item.App)) : data;
+    const groupSelect = document.getElementById('appGroupSelect');
+    groupSelect.innerHTML = [
+      '<option value="">全部分组</option>',
+      ...allGroups.map(group => `<option value="${encode(group)}">${group}</option>`)
+    ].join('');
+    groupSelect.value = selectedAppGroup ? encode(selectedAppGroup) : '';
+
+    const appsInGroup = selectedAppGroup
+      ? allApps.filter(app => getAppGroup(app) === selectedAppGroup)
+      : allApps;
+
+    selectedApps = selectedApps.filter(app => appsInGroup.includes(app)).slice(0, 1);
+    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+
+    const appSelect = document.getElementById('appSelect');
+    const allAppsLabel = selectedAppGroup ? `全部 ${selectedAppGroup} 分组 App` : '全部 App';
+    appSelect.innerHTML = [
+      `<option value="">${allAppsLabel}</option>`,
+      ...appsInGroup.map(app => `<option value="${encode(app)}">${app}</option>`)
+    ].join('');
+    appSelect.value = selectedApps[0] ? encode(selectedApps[0]) : '';
+    appSelect.disabled = appsInGroup.length === 0;
+
+    let appFiltered = applyGroupFilter(data);
+    if (selectedApps.length) {
+      appFiltered = appFiltered.filter(item => selectedApps.includes(item.App));
+    }
+
     const allBatches = [...new Set(appFiltered.map(item => item.Batch))].sort();
     selectedBatches = selectedBatches.filter(batch => allBatches.includes(batch));
     localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
@@ -262,7 +316,8 @@
     const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
     renderSelectors(data);
 
-    let filteredData = selectedApps.length ? data.filter(item => selectedApps.includes(item.App)) : data;
+    let filteredData = applyGroupFilter(data);
+    filteredData = selectedApps.length ? filteredData.filter(item => selectedApps.includes(item.App)) : filteredData;
     filteredData = selectedBatches.length ? filteredData.filter(item => selectedBatches.includes(item.Batch)) : filteredData;
 
     const keywordMap = {};
@@ -376,16 +431,6 @@
     saveMasterData(data);
     selectedItems = selectedItems.filter(key => key !== `${app}__${batch}__${keyword}`);
     localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
-    renderDashboard();
-  }
-
-  function toggleApp(app) {
-    selectedApps = selectedApps.includes(app)
-      ? selectedApps.filter(item => item !== app)
-      : [...selectedApps, app];
-    selectedBatches = [];
-    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
-    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
     renderDashboard();
   }
 
@@ -569,7 +614,7 @@
   }
 
   function getCurrentFilteredRecords() {
-    let records = getAllRecords();
+    let records = applyGroupFilter(getAllRecords());
     if (selectedApps.length) {
       records = records.filter(item => selectedApps.includes(item.App));
     }
@@ -796,6 +841,27 @@
     receiveUrlData();
     renderDashboard();
 
+    document.getElementById('appGroupSelect').addEventListener('change', event => {
+      selectedAppGroup = event.target.value ? decode(event.target.value) : '';
+      selectedAppGroup = '';
+      selectedApps = [];
+      selectedBatches = [];
+      if (selectedAppGroup) localStorage.setItem('selected_app_group', selectedAppGroup);
+      else localStorage.removeItem('selected_app_group');
+      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      renderDashboard();
+    });
+
+    document.getElementById('appSelect').addEventListener('change', event => {
+      const app = event.target.value ? decode(event.target.value) : '';
+      selectedApps = app ? [app] : [];
+      selectedBatches = [];
+      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      renderDashboard();
+    });
+
     document.getElementById('exportBtn').addEventListener('click', exportData);
     document.getElementById('excelCurrentBtn').addEventListener('click', () => {
       const records = getCurrentFilteredRecords();
@@ -814,6 +880,7 @@
     document.getElementById('clearBtn').addEventListener('click', () => {
       if (!confirm('确定清空全部 ASO 看板数据吗？建议先点击“导出数据备份”。')) return;
       localStorage.removeItem(MASTER_KEY);
+      localStorage.removeItem('selected_app_group');
       localStorage.removeItem('selected_apps');
       localStorage.removeItem('selected_batches');
       localStorage.removeItem('selected_items_v16');
