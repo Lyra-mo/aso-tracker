@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板 v1.10</title>
+  <title>ASO 动态监控看板 v1.10.1</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -590,6 +590,14 @@
 
   function updateChart(data) {
     const dates = [...new Set(data.map(item => item.Date))].sort((a, b) => parseDate(a) - parseDate(b));
+    const validRanks = data
+      .map(item => Number(item.Rank))
+      .filter(rank => Number.isFinite(rank) && rank > 0);
+    const maxRank = validRanks.length ? Math.max(...validRanks) : 1;
+    const bottomPadding = Math.max(10, Math.ceil(maxRank * 0.12));
+    const axisMax = Math.max(10, Math.ceil((maxRank + bottomPadding) / 10) * 10);
+    const noteY = axisMax;
+
     const seriesMap = data.reduce((acc, item) => {
       const key = itemKey(item);
       if (!acc[key]) {
@@ -613,7 +621,7 @@
       if (note && !seenNotes.has(key)) {
         seenNotes.add(key);
         notes.push({
-          value: [item.Date, 1],
+          value: [item.Date, noteY],
           App: item.App,
           Batch: item.Batch,
           Date: item.Date,
@@ -629,11 +637,18 @@
         type: 'scatter',
         symbol: 'pin',
         symbolSize: 42,
+        symbolOffset: [0, -6],
         z: 20,
+        clip: false,
         itemStyle: { color: '#ed8936' },
         label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
         tooltip: {
           trigger: 'item',
+          position: function (point, params, dom, rect, size) {
+            const left = Math.min(point[0] + 12, size.viewSize[0] - size.contentSize[0] - 12);
+            const top = Math.max(8, point[1] - size.contentSize[1] - 18);
+            return [Math.max(8, left), top];
+          },
           formatter: params => `<b>${escapeHtml(params.data.Date)}</b><br>${escapeHtml(params.data.App)}｜${escapeHtml(params.data.Batch)}<br>${escapeHtml(params.data.Text)}`
         },
         data: notes
@@ -642,16 +657,17 @@
 
     chart.setOption({
       tooltip: { trigger: 'axis' },
-      legend: { type: 'scroll', show: true },
+      legend: { type: 'scroll', show: true, top: 6 },
+      grid: { left: 55, right: 35, top: 55, bottom: 72, containLabel: true },
       xAxis: { type: 'category', data: dates },
-      yAxis: { type: 'value', inverse: true, name: '排名', min: 1 },
+      yAxis: { type: 'value', inverse: true, name: '排名', min: 1, max: axisMax },
       series
     }, true);
   }
 
   function exportData() {
     const payload = {
-      version: '1.10',
+      version: '1.10.1',
       exportedAt: new Date().toISOString(),
       data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')),
       notes: Object.values(getNotesMap())
@@ -736,6 +752,14 @@
       keywordMap[item.Keyword].data[dates.indexOf(item.Date)] = Number(item.Rank);
     });
 
+    const validRanks = records
+      .map(item => Number(item.Rank))
+      .filter(rank => Number.isFinite(rank) && rank > 0);
+    const maxRank = validRanks.length ? Math.max(...validRanks) : 1;
+    const bottomPadding = Math.max(10, Math.ceil(maxRank * 0.12));
+    const axisMax = Math.max(10, Math.ceil((maxRank + bottomPadding) / 10) * 10);
+    const noteY = axisMax;
+
     exportChart.setOption({
       animation: false,
       backgroundColor: '#ffffff',
@@ -766,6 +790,7 @@
         inverse: true,
         name: '排名',
         min: 1,
+        max: axisMax,
         minInterval: 1,
         splitLine: { lineStyle: { color: '#e2e8f0' } }
       },
@@ -779,10 +804,12 @@
             type: 'scatter',
             symbol: 'pin',
             symbolSize: 42,
+            symbolOffset: [0, -6],
             z: 20,
+            clip: false,
             itemStyle: { color: '#ed8936' },
             label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
-            data: batchNotes.map(note => ({ value: [note.Date, 1], Text: note.Text }))
+            data: batchNotes.map(note => ({ value: [note.Date, noteY], Text: note.Text }))
           }];
         })()
       ]
