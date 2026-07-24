@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.0</title>
+  <title>ASO 数据中心 v2.1.1</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -34,6 +34,9 @@
     .down { color: #e53e3e; font-weight: 700; }
     .date-tag { display: inline-block; background: #edf2f7; padding: 3px 7px; border-radius: 4px; margin: 2px; font-size: 12px; }
     .checkpoint { color: #718096; font-size: 10px; margin-left: 3px; }
+    .capture-meta { display:block; color:#718096; font-size:10px; margin-top:2px; }
+    .checkpoint.late { color:#c05621; }
+    .checkpoint.backfill { color:#2f855a; }
     .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
     .note-day-btn { border: 0; background: transparent; cursor: pointer; margin-left: 3px; padding: 0 2px; font-size: 12px; }
     .note-day-btn:hover { transform: scale(1.08); }
@@ -164,7 +167,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.0</span>
+      <span class="version-badge">v2.1.1</span>
     </header>
 
     <main class="page-wrap">
@@ -211,7 +214,7 @@
           </div>
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
-          <div class="hint">ST 继续使用原存储键 aso_master_data，升级不会覆盖历史数据。历史日期旁的 📝 可添加备注。</div>
+          <div class="hint">ST 继续使用原存储键 aso_master_data，升级不会覆盖历史数据。新版会同时保留计划日期、数据日期、实际抓取时间和补抓状态。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
         <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
@@ -311,7 +314,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.0';
+  const DASHBOARD_VERSION = '2.1.1';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -377,17 +380,18 @@
 
     list.forEach(item => {
       const app = String(item.App || '未命名 App').trim();
-      const date = toDateKey(item.Date);
-      if (!earliestByApp[app] || parseDate(date) < parseDate(earliestByApp[app])) {
-        earliestByApp[app] = date;
-      }
+      const dataDate = toDateKey(item.DataDate || item.Date);
+      if (!dataDate) return;
+      if (!earliestByApp[app] || parseDate(dataDate) < parseDate(earliestByApp[app])) earliestByApp[app] = dataDate;
     });
 
     const provisional = list.map(item => {
       const app = String(item.App || '未命名 App').trim();
-      const date = toDateKey(item.Date);
-      const defaultFirstDate = earliestByApp[app] || date;
+      const dataDate = toDateKey(item.DataDate || item.Date);
+      const defaultFirstDate = earliestByApp[app] || dataDate;
       const batch = String(item.Batch || item.batchName || `T1-${compactDate(defaultFirstDate)}`).trim();
+      const explicitCheckpoint = CHECKPOINTS.includes(Number(item.Checkpoint)) ? Number(item.Checkpoint) : null;
+      const delayValue = Number(item.DelayDays);
 
       return {
         ...item,
@@ -395,32 +399,58 @@
         Batch: batch,
         Keyword: String(item.Keyword || '').trim(),
         Rank: String(item.Rank || '').trim(),
-        Date: date
+        Date: dataDate,
+        DataDate: dataDate,
+        ScheduledDate: item.ScheduledDate ? toDateKey(item.ScheduledDate) : '',
+        CapturedAt: item.CapturedAt || item.capturedAt || '',
+        DelayDays: Number.isFinite(delayValue) ? delayValue : null,
+        CaptureStatus: String(item.CaptureStatus || item.captureStatus || '').trim(),
+        RunMode: String(item.RunMode || item.runMode || '').trim(),
+        _ExplicitCheckpoint: explicitCheckpoint
       };
-    }).filter(item => item.Keyword && /^\d+$/.test(item.Rank));
+    }).filter(item => item.Keyword && item.Date && /^\d+$/.test(item.Rank));
 
     const earliestByAppBatch = {};
     provisional.forEach(item => {
       const key = `${item.App}__${item.Batch}`;
-      if (!earliestByAppBatch[key] || parseDate(item.Date) < parseDate(earliestByAppBatch[key])) {
-        earliestByAppBatch[key] = item.Date;
-      }
+      if (!earliestByAppBatch[key] || parseDate(item.Date) < parseDate(earliestByAppBatch[key])) earliestByAppBatch[key] = item.Date;
     });
 
     return provisional.map(item => {
       const firstDate = earliestByAppBatch[`${item.App}__${item.Batch}`] || item.Date;
-      const dayOffset = diffDays(item.Date, firstDate);
+      const actualOffset = diffDays(item.Date, firstDate);
+      const checkpoint = item._ExplicitCheckpoint !== null
+        ? item._ExplicitCheckpoint
+        : (CHECKPOINTS.includes(actualOffset) ? actualOffset : null);
+      const scheduledDate = item.ScheduledDate || (checkpoint !== null ? addDateDays(firstDate, checkpoint) : item.Date);
+      const capturedDate = item.CapturedAt ? toDateKey(item.CapturedAt) : '';
+      const derivedDelay = capturedDate && scheduledDate ? Math.max(0, diffDays(capturedDate, scheduledDate)) : 0;
+      const delayDays = item.DelayDays === null ? derivedDelay : item.DelayDays;
+      let captureStatus = item.CaptureStatus;
+      if (!captureStatus) {
+        if (!item.CapturedAt && !item.ScheduledDate) captureStatus = 'legacy';
+        else if (item.RunMode === 'manual_snapshot') captureStatus = 'manual_snapshot';
+        else if (item.Date === scheduledDate && delayDays > 0) captureStatus = 'completed_backfill';
+        else if (item.Date !== scheduledDate) captureStatus = 'completed_late';
+        else captureStatus = 'completed';
+      }
 
-      return {
+      const normalized = {
         ...item,
-        DayOffset: dayOffset,
-        Checkpoint: CHECKPOINTS.includes(dayOffset) ? dayOffset : null
+        ScheduledDate: scheduledDate,
+        DataDate: item.Date,
+        DelayDays: delayDays,
+        CaptureStatus: captureStatus,
+        DayOffset: checkpoint !== null ? checkpoint : actualOffset,
+        Checkpoint: checkpoint
       };
+      delete normalized._ExplicitCheckpoint;
+      return normalized;
     });
   }
 
   function recordKey(item) {
-    return `${item.App}__${item.Batch}__${item.Keyword}__${item.Date}`;
+    return `${item.App}__${item.Batch}__${item.Keyword}__${item.Date}__${item.Checkpoint ?? 'temp'}__${item.ScheduledDate || item.Date}`;
   }
 
   function itemKey(item) {
@@ -656,6 +686,24 @@
     });
   }
 
+  function stCheckpointBadge(record) {
+    if (record.CaptureStatus === 'manual_snapshot') return '<span class="checkpoint">手动</span>';
+    const checkpointText = record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`;
+    if (record.CaptureStatus === 'completed_backfill') return `<span class="checkpoint backfill">${checkpointText}·补抓</span>`;
+    if (record.CaptureStatus === 'completed_late') return `<span class="checkpoint late">${checkpointText}·晚${Number(record.DelayDays)||0}天</span>`;
+    if (record.CaptureStatus === 'legacy') return `<span class="checkpoint">${checkpointText}·旧版</span>`;
+    return `<span class="checkpoint">${checkpointText}</span>`;
+  }
+
+  function stCaptureMeta(record) {
+    const capturedDate = record.CapturedAt ? toDateKey(record.CapturedAt) : '';
+    const parts = [];
+    if (record.ScheduledDate && record.ScheduledDate !== record.Date) parts.push(`计划 ${record.ScheduledDate}`);
+    if (record.CaptureStatus === 'completed_backfill' && capturedDate && capturedDate !== record.Date) parts.push(`实抓 ${capturedDate}`);
+    if (record.CaptureStatus === 'completed_late' && capturedDate) parts.push(`实抓 ${capturedDate}`);
+    return parts.length ? `<span class="capture-meta">${parts.map(escapeHtml).join(' · ')}</span>` : '';
+  }
+
   function renderDashboard() {
     const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
     renderSelectors(data);
@@ -672,7 +720,7 @@
     });
 
     const rows = Object.values(keywordMap).map(records => {
-      records.sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+      records.sort((a, b) => parseDate(a.Date) - parseDate(b.Date) || Number(a.Checkpoint ?? 999) - Number(b.Checkpoint ?? 999));
       const first = records[0];
       const last = records[records.length - 1];
       const interval = diffDays(last.Date, first.Date);
@@ -711,7 +759,8 @@
         return `
         <span class="date-tag">
           ${record.Date}: <b>#${record.Rank}</b>
-          <span class="checkpoint">${record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`}</span>
+          ${stCheckpointBadge(record)}
+          ${stCaptureMeta(record)}
           <button class="note-day-btn"
             data-app="${encode(record.App)}"
             data-batch="${encode(record.Batch)}"
@@ -910,7 +959,7 @@
 
   function exportData() {
     const payload = {
-      version: '1.10.1',
+      version: DASHBOARD_VERSION,
       exportedAt: new Date().toISOString(),
       data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')),
       notes: Object.values(getNotesMap())
@@ -933,7 +982,7 @@
     });
 
     return Object.values(groups).map(group => {
-      group.sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+      group.sort((a, b) => parseDate(a.Date) - parseDate(b.Date) || Number(a.Checkpoint ?? 999) - Number(b.Checkpoint ?? 999));
       return group;
     }).sort((a, b) => {
       const left = `${a[0].App}${a[0].Batch}${a[0].Keyword}`;
@@ -1162,7 +1211,7 @@
       groups.forEach(group => {
         const first = group[0];
         const last = group[group.length - 1];
-        const checkpointRecord = checkpoint => group.find(item => item.DayOffset === checkpoint);
+        const checkpointRecord = checkpoint => group.find(item => item.Checkpoint === checkpoint);
         const rankChange = Number(first.Rank) - Number(last.Rank);
         const row = summarySheet.addRow([
           first.App,
@@ -1220,6 +1269,41 @@
         { key: 'notes', width: 38 }
       ];
       summarySheet.autoFilter = `A4:K${Math.max(4, summarySheet.rowCount)}`;
+
+      const nodeSheet = workbook.addWorksheet('ST节点明细', { views: [{ state:'frozen', ySplit:1 }] });
+      nodeSheet.columns = [
+        { header:'App', key:'app', width:22 },
+        { header:'测试批次', key:'batch', width:18 },
+        { header:'Keyword', key:'keyword', width:32 },
+        { header:'节点', key:'checkpoint', width:10 },
+        { header:'计划日期', key:'scheduledDate', width:14 },
+        { header:'数据日期', key:'dataDate', width:14 },
+        { header:'实际抓取时间', key:'capturedAt', width:22 },
+        { header:'延迟天数', key:'delayDays', width:11 },
+        { header:'状态', key:'status', width:18 },
+        { header:'排名', key:'rank', width:10 }
+      ];
+      records
+        .slice()
+        .sort((a,b)=>`${a.App}${a.Batch}${a.Keyword}`.localeCompare(`${b.App}${b.Batch}${b.Keyword}`) || parseDate(a.Date)-parseDate(b.Date))
+        .forEach(record => nodeSheet.addRow({
+          app:record.App,
+          batch:record.Batch,
+          keyword:record.Keyword,
+          checkpoint:record.CaptureStatus==='manual_snapshot'?'手动':record.Checkpoint===null?`D${record.DayOffset}临时`:`D${record.Checkpoint}`,
+          scheduledDate:record.ScheduledDate || '',
+          dataDate:record.DataDate || record.Date,
+          capturedAt:record.CapturedAt || '',
+          delayDays:Number(record.DelayDays)||0,
+          status:record.CaptureStatus || 'legacy',
+          rank:Number(record.Rank)
+        }));
+      nodeSheet.getRow(1).eachCell(cell=>{
+        cell.font={bold:true,color:{argb:'FFFFFFFF'}};
+        cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4A5568'}};
+        cell.alignment={horizontal:'center',vertical:'middle'};
+      });
+      nodeSheet.autoFilter = `A1:J${Math.max(1,nodeSheet.rowCount)}`;
 
       const trendSheet = workbook.addWorksheet('排名趋势图', {
         properties: { defaultRowHeight: 18 },
