@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 动态监控看板 v1.10.1</title>
+  <title>ASO 数据中心 v2.0.0</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -48,60 +48,243 @@
     .delete-word-btn { background: #feb2b2; border: 0; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
     .batch-tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e6fffa; color: #276749; font-size: 12px; white-space: nowrap; }
     #emptyState { display: none; padding: 30px; text-align: center; color: #718096; background: #fff; border: 1px dashed #cbd5e0; }
+
+    :root {
+      --brand: #3b82f6;
+      --brand-dark: #2563eb;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --muted: #718096;
+      --success: #2f855a;
+      --danger: #c53030;
+      --warning: #b7791f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .app-shell { min-height: 100vh; }
+    .topbar {
+      position: sticky; top: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: space-between; gap: 18px;
+      padding: 14px 22px; background: rgba(255,255,255,.96);
+      border-bottom: 1px solid var(--border); backdrop-filter: blur(10px);
+    }
+    .brand-wrap { display:flex; align-items:center; gap:12px; min-width:250px; }
+    .brand-icon { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; background:#ebf8ff; font-size:22px; }
+    .brand-title { font-weight:800; font-size:18px; color:#1a202c; }
+    .brand-subtitle { font-size:11px; color:var(--muted); margin-top:2px; }
+    .main-nav { display:flex; flex-wrap:wrap; gap:6px; }
+    .nav-btn { border:0; background:transparent; color:#4a5568; padding:9px 14px; border-radius:8px; cursor:pointer; font-weight:700; }
+    .nav-btn:hover { background:#edf2f7; }
+    .nav-btn.active { background:#ebf8ff; color:#2b6cb0; }
+    .version-badge { padding:5px 9px; border-radius:999px; background:#edf2f7; color:#4a5568; font-size:11px; white-space:nowrap; }
+    .page-wrap { padding:20px; max-width:1800px; margin:0 auto; }
+    .page-section { display:none; }
+    .page-section.active { display:block; }
+    .page-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; }
+    .page-heading h2 { margin:0; color:#1a202c; }
+    .page-heading p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+    .cards { display:grid; grid-template-columns:repeat(6,minmax(150px,1fr)); gap:12px; margin-bottom:18px; }
+    .metric-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:16px; min-height:104px; }
+    .metric-label { font-size:12px; color:var(--muted); }
+    .metric-value { margin-top:9px; font-size:28px; line-height:1; font-weight:800; color:#1a202c; }
+    .metric-note { margin-top:9px; color:#718096; font-size:11px; }
+    .metric-good .metric-value { color:#2f855a; }
+    .metric-blue .metric-value { color:#2b6cb0; }
+    .metric-orange .metric-value { color:#c05621; }
+    .two-col { display:grid; grid-template-columns:1.15fr .85fr; gap:16px; }
+    .panel { background:#fff; border:1px solid var(--border); border-radius:10px; padding:18px; }
+    .panel-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .panel-title h3 { margin:0; font-size:16px; }
+    .status-list { display:grid; gap:8px; }
+    .status-row { display:grid; grid-template-columns:130px 1fr auto; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid #edf2f7; }
+    .status-row:last-child { border-bottom:0; }
+    .status-name { font-weight:700; }
+    .status-detail { font-size:12px; color:var(--muted); }
+    .status-pill { padding:4px 8px; border-radius:999px; font-size:11px; font-weight:700; background:#edf2f7; }
+    .status-pill.ok { background:#c6f6d5; color:#22543d; }
+    .status-pill.warn { background:#feebc8; color:#9c4221; }
+    .section-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+    .section-tab { border:1px solid #cbd5e0; background:#fff; color:#4a5568; border-radius:8px; padding:8px 13px; cursor:pointer; font-weight:700; }
+    .section-tab.active { background:#4299e1; color:#fff; border-color:#3182ce; }
+    .ios-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+    .text-input { width:100%; min-width:180px; padding:8px 10px; border:1px solid #cbd5e0; border-radius:6px; background:#fff; }
+    .summary-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .summary-chip { background:#edf2f7; border-radius:999px; padding:5px 9px; font-size:12px; color:#4a5568; }
+    .table-wrap { overflow:auto; border:1px solid var(--border); border-radius:10px; background:#fff; }
+    .table-wrap table { margin:0; min-width:1220px; }
+    .keyword-link { border:0; background:transparent; color:#2b6cb0; cursor:pointer; font-weight:700; padding:0; }
+    .source-list { max-width:240px; white-space:normal; text-align:left; }
+    .rank-up { color:#2f855a; font-weight:700; }
+    .rank-down { color:#c53030; font-weight:700; }
+    .rank-new { color:#2b6cb0; font-weight:700; }
+    .rank-drop { color:#718096; font-weight:700; }
+    .empty-box { padding:34px; text-align:center; color:#718096; border:1px dashed #cbd5e0; border-radius:10px; background:#fff; }
+    .drawer-mask { position:fixed; inset:0; background:rgba(26,32,44,.35); z-index:90; display:none; }
+    .drawer-mask.open { display:block; }
+    .drawer { position:absolute; right:0; top:0; bottom:0; width:min(720px,94vw); background:#fff; box-shadow:-8px 0 28px rgba(0,0,0,.18); overflow:auto; padding:22px; }
+    .drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+    .drawer-close { border:0; background:#edf2f7; width:34px; height:34px; border-radius:8px; cursor:pointer; font-size:18px; }
+    .detail-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }
+    .detail-item { padding:10px; border:1px solid #edf2f7; border-radius:8px; }
+    .detail-item span { display:block; font-size:11px; color:var(--muted); }
+    .detail-item b { display:block; margin-top:5px; }
+    .data-actions { display:flex; flex-wrap:wrap; gap:9px; }
+    .action-btn { border:0; border-radius:7px; padding:9px 13px; cursor:pointer; font-weight:700; background:#edf2f7; color:#2d3748; }
+    .action-btn.primary { background:#4299e1; color:#fff; }
+    .action-btn.success { background:#c6f6d5; color:#22543d; }
+    .action-btn.danger { background:#fed7d7; color:#9b2c2c; }
+    .storage-row { display:grid; grid-template-columns:220px 1fr auto; gap:12px; padding:12px 0; border-bottom:1px solid #edf2f7; align-items:center; }
+    .storage-row:last-child { border-bottom:0; }
+    .storage-key { font-weight:700; }
+    .storage-note { font-size:12px; color:var(--muted); }
+    .hidden { display:none !important; }
+    @media (max-width:1200px) { .cards { grid-template-columns:repeat(3,1fr); } .two-col { grid-template-columns:1fr; } }
+    @media (max-width:760px) { .topbar { align-items:flex-start; flex-direction:column; } .cards { grid-template-columns:repeat(2,1fr); } .page-wrap { padding:12px; } .detail-grid { grid-template-columns:repeat(2,1fr); } }
+
   </style>
 </head>
 <body>
-  <h2>📈 ASO 动态监控看板</h2>
-
-  <div class="control-panel">
-    <div class="toolbar">
-      <button id="exportBtn" class="export-btn">导出 JSON 备份</button>
-      <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
-      <button id="excelAllBtn" class="excel-btn">导出全部 Excel</button>
-      <button id="importBtn" class="import-btn">导入 JSON 备份</button>
-      <input id="importFile" type="file" accept="application/json,.json" hidden>
-      <button id="clearBtn" class="clear-btn">⚠️ 清空所有数据</button>
-    </div>
-
-    <div class="selector-title">App 筛选</div>
-    <div class="filter-row">
-      <div class="filter-field">
-        <label for="appGroupSelect">分组</label>
-        <select id="appGroupSelect" class="filter-select"></select>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-wrap">
+        <div class="brand-icon">📊</div>
+        <div>
+          <div class="brand-title">ASO 数据中心</div>
+          <div class="brand-subtitle">Sensor Tower 排名追踪 · 七麦 iOS 关键词发现</div>
+        </div>
       </div>
-      <div class="filter-field">
-        <label for="appSelect">App 名称</label>
-        <select id="appSelect" class="filter-select"></select>
-      </div>
-    </div>
+      <nav class="main-nav" aria-label="主导航">
+        <button class="nav-btn active" data-page="overviewSection">总览</button>
+        <button class="nav-btn" data-page="stSection">Sensor Tower</button>
+        <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
+        <button class="nav-btn" data-page="dataSection">数据管理</button>
+      </nav>
+      <span class="version-badge">v2.0.0</span>
+    </header>
 
-    <div class="selector-title">测试批次筛选</div>
-    <div id="batchSelector" class="selector"></div>
+    <main class="page-wrap">
+      <section id="overviewSection" class="page-section active">
+        <div class="page-heading">
+          <div><h2>总览</h2><p>快速确认三类数据的规模、最新变化和同步状态。</p></div>
+          <div class="version-badge" id="overviewLatestDate">暂无同步</div>
+        </div>
+        <div class="cards">
+          <div class="metric-card metric-blue"><div class="metric-label">ST 追踪关键词</div><div class="metric-value" id="metricStKeywords">0</div><div class="metric-note" id="metricStKeywordsNote">全部 App / 批次</div></div>
+          <div class="metric-card metric-good"><div class="metric-label">ST 最新上涨词</div><div class="metric-value" id="metricStUp">0</div><div class="metric-note" id="metricStUpNote">按每词首刷与最新排名</div></div>
+          <div class="metric-card metric-orange"><div class="metric-label">iOS 排名变动词</div><div class="metric-value" id="metricIosChanged">0</div><div class="metric-note" id="metricIosChangedNote">最新抓取日，去重后</div></div>
+          <div class="metric-card metric-blue"><div class="metric-label">iOS 新进榜词</div><div class="metric-value" id="metricIosNew">0</div><div class="metric-note" id="metricIosNewNote">最新抓取日，去重后</div></div>
+          <div class="metric-card"><div class="metric-label">iOS 已保存快照</div><div class="metric-value" id="metricSnapshots">0</div><div class="metric-note" id="metricSnapshotsNote">按 App / 批次 / 日期保存</div></div>
+          <div class="metric-card"><div class="metric-label">最近同步时间</div><div class="metric-value" style="font-size:18px" id="metricLastSync">—</div><div class="metric-note" id="metricLastSyncNote">来自插件或手动导入</div></div>
+        </div>
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-title"><h3>最新变化摘要</h3><span class="version-badge" id="latestSummaryScope">全部项目</span></div>
+            <div id="overviewChangeSummary" class="status-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><h3>数据源状态</h3><span class="version-badge">本机浏览器</span></div>
+            <div id="overviewSourceStatus" class="status-list"></div>
+          </div>
+        </div>
+      </section>
 
-    <div class="hint">App 会按名称第一个空格前的内容自动分组。历史日期旁的 📝 可为该 App／批次／日期添加备注；备注会显示在表格、折线图和 Excel 中。</div>
+      <section id="stSection" class="page-section">
+        <div class="page-heading"><div><h2>Sensor Tower</h2><p>保留原有 Google Play 关键词排名、批次、备注、趋势图和 Excel 导出。</p></div></div>
+        <div class="control-panel">
+          <div class="toolbar">
+            <button id="exportBtn" class="export-btn">导出 ST JSON 备份</button>
+            <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
+            <button id="excelAllBtn" class="excel-btn">导出全部 ST Excel</button>
+            <button id="importBtn" class="import-btn">导入 ST JSON 备份</button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden>
+            <button id="clearBtn" class="clear-btn">⚠️ 清空 ST 数据</button>
+          </div>
+          <div class="selector-title">App 筛选</div>
+          <div class="filter-row">
+            <div class="filter-field"><label for="appGroupSelect">分组</label><select id="appGroupSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="appSelect">App 名称</label><select id="appSelect" class="filter-select"></select></div>
+          </div>
+          <div class="selector-title">测试批次筛选</div>
+          <div id="batchSelector" class="selector"></div>
+          <div class="hint">ST 继续使用原存储键 aso_master_data，升级不会覆盖历史数据。历史日期旁的 📝 可添加备注。</div>
+        </div>
+        <div id="chartContainer" style="width:100%;height:400px;"></div>
+        <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
+        <div class="table-wrap">
+          <table id="dataTable">
+            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名 (Date)</th><th>最新排名 (Date)</th><th>抓取间隔</th><th>Rank Change</th><th>历史抓取明细</th><th>备注</th><th>操作</th></tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="iosSection" class="page-section">
+        <div class="page-heading"><div><h2>iOS 七麦</h2><p>同一天先全局去重，再分别查看“相关词＋排名变动”和“相关词＋新进榜”。默认按结果数降序。</p></div><div class="version-badge" id="iosRecordBadge">0 条</div></div>
+        <div class="control-panel">
+          <div class="section-tabs">
+            <button class="section-tab active" data-ios-category="rank_changed">相关词＋排名变动</button>
+            <button class="section-tab" data-ios-category="new_entry">相关词＋新进榜</button>
+          </div>
+          <div class="ios-toolbar">
+            <div class="filter-field"><label for="iosAppSelect">App</label><select id="iosAppSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="iosBatchSelect">测试批次</label><select id="iosBatchSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="iosCountrySelect">国家</label><select id="iosCountrySelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="iosDateSelect">抓取日期</label><select id="iosDateSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="iosSourceInput">来源词</label><input id="iosSourceInput" class="text-input" placeholder="例如 remote"></div>
+            <div class="filter-field"><label for="iosKeywordInput">结果关键词</label><input id="iosKeywordInput" class="text-input" placeholder="搜索关键词"></div>
+          </div>
+          <div class="summary-line" id="iosSummaryLine"></div>
+        </div>
+        <div id="iosEmpty" class="empty-box">暂无七麦数据。可从“数据管理”导入插件导出的 14 天历史 JSON；插件同步接入后也会自动进入这里。</div>
+        <div id="iosTableWrap" class="table-wrap hidden">
+          <table>
+            <thead id="iosTableHead"></thead>
+            <tbody id="iosTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="dataSection" class="page-section">
+        <div class="page-heading"><div><h2>数据管理</h2><p>ST 与七麦分开存储、统一备份。清理操作也按来源分开，降低误删风险。</p></div></div>
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-title"><h3>导入与导出</h3></div>
+            <div class="data-actions">
+              <button id="exportUnifiedBtn" class="action-btn primary">导出全部 JSON</button>
+              <button id="exportIosExcelBtn" class="action-btn success">导出 iOS Excel</button>
+              <button id="importUnifiedBtn" class="action-btn">导入统一备份</button>
+              <button id="importQimaiBtn" class="action-btn">导入七麦 14 天历史</button>
+              <input id="importUnifiedFile" type="file" accept="application/json,.json" hidden>
+              <input id="importQimaiFile" type="file" accept="application/json,.json" hidden>
+            </div>
+            <div class="hint">支持导入联合看板备份，也支持插件导出的“七麦_14天历史_YYYY-MM-DD.json”。导入采用合并，不会先清空。</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><h3>本地数据量</h3></div>
+            <div id="storageSummary"></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:16px;">
+          <div class="panel-title"><h3>分来源清理</h3></div>
+          <div class="data-actions">
+            <button id="clearIosBtn" class="action-btn danger">清空 iOS 七麦数据</button>
+            <button id="clearSyncLogsBtn" class="action-btn danger">清空同步日志</button>
+          </div>
+          <div class="hint">ST 数据请在 Sensor Tower 页面单独清理。清理前建议先导出全部 JSON。</div>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <div id="chartContainer" style="width:100%;height:400px;"></div>
-  <div id="emptyState">暂无数据。请先通过插件抓取，或导入 JSON 备份。</div>
-
-  <table id="dataTable">
-    <thead>
-      <tr>
-        <th>勾选</th>
-        <th>App</th>
-        <th>测试批次</th>
-        <th>Keyword</th>
-        <th>首刷排名 (Date)</th>
-        <th>最新排名 (Date)</th>
-        <th>抓取间隔</th>
-        <th>Rank Change</th>
-        <th>历史抓取明细</th>
-        <th>备注</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody id="tableBody"></tbody>
-  </table>
+  <div id="keywordDrawerMask" class="drawer-mask" aria-hidden="true">
+    <aside class="drawer">
+      <div class="drawer-head"><div><h2 id="drawerKeyword" style="margin:0"></h2><p id="drawerSubtitle" class="hint"></p></div><button id="drawerCloseBtn" class="drawer-close">×</button></div>
+      <div id="drawerStats" class="detail-grid"></div>
+      <div id="iosTrendChart" style="width:100%;height:300px;"></div>
+      <div class="panel-title" style="margin-top:14px"><h3>每日轨迹</h3></div>
+      <div class="table-wrap"><table style="min-width:760px"><thead><tr><th>日期</th><th>类型</th><th>排名</th><th>排名变动</th><th>指数</th><th>结果数</th><th>流行度</th><th>来源词</th></tr></thead><tbody id="drawerHistoryBody"></tbody></table></div>
+    </aside>
+  </div>
 
 <script>
   const MASTER_KEY = 'aso_master_data';
@@ -109,8 +292,22 @@
   const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v17';
   const NOTES_KEY = 'aso_notes_v110';
   const CHECKPOINTS = [0, 3, 7, 14, 28];
+  const QIMAI_KEY = 'aso_ios_qimai_snapshots_v200';
+  const SYNC_LOG_KEY = 'aso_sync_logs_v200';
+  const DASHBOARD_VERSION = '2.0.0';
 
-  const chart = echarts.init(document.getElementById('chartContainer'));
+  const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
+  let iosTrendChart = null;
+  let activePage = localStorage.getItem('aso_active_page_v200') || 'overviewSection';
+  let iosCategory = localStorage.getItem('aso_ios_category_v200') || 'rank_changed';
+  const iosFilters = {
+    app: localStorage.getItem('aso_ios_filter_app_v200') || '',
+    batch: localStorage.getItem('aso_ios_filter_batch_v200') || '',
+    country: localStorage.getItem('aso_ios_filter_country_v200') || '',
+    date: localStorage.getItem('aso_ios_filter_date_v200') || '',
+    source: '',
+    keyword: ''
+  };
   let selectedAppGroup = localStorage.getItem('selected_app_group') || '';
   let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
   let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
@@ -338,13 +535,32 @@
   function receiveUrlData() {
     const params = new URLSearchParams(window.location.search);
     const encodedData = params.get('data');
-    if (!encodedData) return;
+    const encodedQimai = params.get('qimai');
+    const source = params.get('source') || '';
+    let received = false;
 
     try {
-      mergeIncomingData(JSON.parse(decodeURIComponent(encodedData)));
-      window.history.replaceState({}, document.title, window.location.pathname);
+      if (encodedQimai) {
+        mergeQimaiPayload(JSON.parse(decodeURIComponent(encodedQimai)), 'plugin_url');
+        received = true;
+      }
+
+      if (encodedData) {
+        const payload = JSON.parse(decodeURIComponent(encodedData));
+        const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' ||
+          Boolean(payload?.snapshot || payload?.snapshots || payload?.changedResults || payload?.newEntryResults);
+        if (looksLikeQimai) mergeQimaiPayload(payload, 'plugin_url');
+        else mergeIncomingData(payload);
+        received = true;
+      }
+
+      if (received) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        addSyncLog({ source: source || (encodedQimai ? 'qimai_ios' : 'sensortower'), status: 'success', message: '已接收插件同步数据。' });
+      }
     } catch (error) {
       console.error('数据解析失败：', error);
+      addSyncLog({ source: source || 'unknown', status: 'failed', message: error.message || String(error) });
       alert('看板收到数据，但解析失败。插件本地备份仍然保留。');
     }
   }
@@ -655,6 +871,7 @@
       });
     }
 
+    if (!chart) return;
     chart.setOption({
       tooltip: { trigger: 'axis' },
       legend: { type: 'scroll', show: true, top: 6 },
@@ -877,7 +1094,7 @@
 
     try {
       const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'ASO 动态监控看板';
+      workbook.creator = 'ASO 数据中心';
       workbook.created = new Date();
       workbook.modified = new Date();
 
@@ -1050,6 +1267,8 @@
         mergeIncomingData(incoming);
         if (!Array.isArray(parsed) && Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
         renderDashboard();
+        renderOverview();
+        renderStorageSummary();
         alert('导入完成。排名和备注均已合并，原数据未删除。');
       } catch (error) {
         alert(`导入失败：${error.message}`);
@@ -1058,10 +1277,516 @@
     reader.readAsText(file);
   }
 
+
+  // ---------------- ASO 数据中心 / iOS 七麦 ----------------
+  function safeJsonParse(value, fallback) {
+    try { return JSON.parse(value); } catch (_) { return fallback; }
+  }
+
+  function getQimaiSnapshots() {
+    const parsed = safeJsonParse(localStorage.getItem(QIMAI_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeQimaiSnapshot).filter(Boolean) : [];
+  }
+
+  function saveQimaiSnapshots(snapshots) {
+    const map = new Map();
+    (snapshots || []).map(normalizeQimaiSnapshot).filter(Boolean).forEach(snapshot => {
+      map.set(qimaiSnapshotKey(snapshot), snapshot);
+    });
+    const sorted = [...map.values()].sort((a, b) => {
+      const dateDiff = (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0);
+      return dateDiff || String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    localStorage.setItem(QIMAI_KEY, JSON.stringify(sorted));
+  }
+
+  function qimaiSnapshotKey(snapshot) {
+    return [snapshot.app, snapshot.appStoreId, snapshot.batch, snapshot.country, snapshot.date].map(value => String(value || '').trim().toLowerCase()).join('__');
+  }
+
+  function numberOrNull(value) {
+    if (value === null || value === undefined || value === '' || value === '-') return null;
+    const cleaned = String(value).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+    if (!cleaned) return null;
+    const number = Number(cleaned[0]);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function normalizeSourceKeywords(row) {
+    const values = Array.isArray(row?.sourceKeywords) ? row.sourceKeywords : [row?.sourceKeyword];
+    return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+  }
+
+  function normalizeQimaiRow(row, snapshot, category) {
+    if (!row || !String(row.keyword || '').trim()) return null;
+    const status = row.rankChangeStatus || (category === 'new_entry' ? 'new_entry' : 'changed');
+    return {
+      app: String(row.app || snapshot.app || '未命名 iOS App').trim(),
+      appStoreId: String(row.appStoreId || snapshot.appStoreId || '').trim(),
+      batch: String(row.batch || snapshot.batch || '未命名批次').trim(),
+      country: String(row.country || snapshot.country || '').trim().toUpperCase(),
+      date: toDateKey(row.currentDate || snapshot.date),
+      compareDate: toDateKey(row.compareDate || ''),
+      category,
+      keyword: String(row.keyword || '').trim(),
+      keywordNormalized: String(row.keywordNormalized || row.keyword || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase(),
+      sourceKeywords: normalizeSourceKeywords(row),
+      rank: numberOrNull(row.rank),
+      rankChangeText: String(row.rankChangeText ?? (status === 'new_entry' ? '新进榜' : '')).trim(),
+      rankChangeStatus: status,
+      rankChangeValue: numberOrNull(row.rankChangeValue),
+      index: numberOrNull(row.index),
+      resultCount: numberOrNull(row.resultCount),
+      popularity: numberOrNull(row.popularity),
+      capturedAt: row.capturedAt || snapshot.createdAt || new Date().toISOString()
+    };
+  }
+
+  function normalizeQimaiSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    const date = toDateKey(snapshot.date || snapshot.currentDate || snapshot.config?.currentDate);
+    if (!date) return null;
+    const base = {
+      id: snapshot.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: String(snapshot.taskId || '').trim(),
+      app: String(snapshot.app || snapshot.config?.app || '未命名 iOS App').trim(),
+      appStoreId: String(snapshot.appStoreId || snapshot.config?.appStoreId || '').trim(),
+      batch: String(snapshot.batch || snapshot.config?.batch || '未命名批次').trim(),
+      country: String(snapshot.country || snapshot.config?.country || '').trim().toUpperCase(),
+      day: numberOrNull(snapshot.day || snapshot.config?.autoDay),
+      date,
+      status: String(snapshot.status || 'success'),
+      createdAt: snapshot.createdAt || new Date().toISOString(),
+      failures: Array.isArray(snapshot.failures) ? snapshot.failures : []
+    };
+    const changedSource = Array.isArray(snapshot.changedResults) ? snapshot.changedResults : [];
+    const newSource = Array.isArray(snapshot.newEntryResults) ? snapshot.newEntryResults : [];
+    base.changedResults = changedSource.map(row => normalizeQimaiRow(row, base, 'rank_changed')).filter(Boolean);
+    base.newEntryResults = newSource.map(row => normalizeQimaiRow(row, base, 'new_entry')).filter(Boolean);
+    return base;
+  }
+
+  function extractQimaiSnapshots(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.snapshots)) return payload.snapshots;
+    if (payload.snapshot) return [payload.snapshot];
+    if (payload.qimaiState) {
+      const state = payload.qimaiState;
+      return [{
+        app: state.config?.app,
+        appStoreId: state.config?.appStoreId,
+        batch: state.config?.batch,
+        country: state.config?.country,
+        date: state.config?.currentDate,
+        day: state.config?.autoDay,
+        status: state.status,
+        changedResults: state.changedResults,
+        newEntryResults: state.newEntryResults,
+        failures: state.failures,
+        createdAt: state.finishedAt || new Date().toISOString()
+      }];
+    }
+    if (payload.changedResults || payload.newEntryResults) return [payload];
+    return [];
+  }
+
+  function mergeQimaiPayload(payload, origin = 'import') {
+    const incoming = extractQimaiSnapshots(payload).map(normalizeQimaiSnapshot).filter(Boolean);
+    if (!incoming.length) throw new Error('文件中没有可识别的七麦快照。');
+    const existing = getQimaiSnapshots();
+    const map = new Map(existing.map(item => [qimaiSnapshotKey(item), item]));
+    incoming.forEach(item => map.set(qimaiSnapshotKey(item), item));
+    saveQimaiSnapshots([...map.values()]);
+    addSyncLog({ source: 'qimai_ios', status: 'success', message: `${origin === 'plugin_url' ? '插件同步' : '导入'} ${incoming.length} 个七麦快照。` });
+    return incoming.length;
+  }
+
+  function addSyncLog(entry) {
+    const logs = safeJsonParse(localStorage.getItem(SYNC_LOG_KEY) || '[]', []);
+    logs.unshift({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, at: new Date().toISOString(), ...entry });
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(logs.slice(0, 200)));
+  }
+
+  function getSyncLogs() {
+    const logs = safeJsonParse(localStorage.getItem(SYNC_LOG_KEY) || '[]', []);
+    return Array.isArray(logs) ? logs : [];
+  }
+
+  function dedupeQimaiRows(snapshots, category) {
+    const map = new Map();
+    snapshots.forEach(snapshot => {
+      const rows = category === 'new_entry' ? snapshot.newEntryResults : snapshot.changedResults;
+      rows.forEach(row => {
+        const key = [row.app, row.appStoreId, row.batch, row.country, row.date, row.keywordNormalized, category].join('|');
+        if (!map.has(key)) {
+          map.set(key, { ...row, sourceKeywords: [...row.sourceKeywords], matchCount: 1 });
+          return;
+        }
+        const current = map.get(key);
+        row.sourceKeywords.forEach(source => { if (!current.sourceKeywords.includes(source)) current.sourceKeywords.push(source); });
+        current.matchCount += 1;
+        if (Number.isFinite(row.rank) && (!Number.isFinite(current.rank) || row.rank < current.rank)) {
+          current.rank = row.rank;
+          current.rankChangeText = row.rankChangeText;
+          current.rankChangeStatus = row.rankChangeStatus;
+          current.rankChangeValue = row.rankChangeValue;
+        }
+        current.index = maxFinite(current.index, row.index);
+        current.resultCount = maxFinite(current.resultCount, row.resultCount);
+        current.popularity = maxFinite(current.popularity, row.popularity);
+      });
+    });
+    return [...map.values()];
+  }
+
+  function maxFinite(a, b) {
+    const values = [a, b].filter(Number.isFinite);
+    return values.length ? Math.max(...values) : null;
+  }
+
+  function getQimaiTimelineStats(allSnapshots, row) {
+    const related = [];
+    ['rank_changed', 'new_entry'].forEach(category => {
+      dedupeQimaiRows(allSnapshots, category).forEach(item => {
+        if (item.app === row.app && item.appStoreId === row.appStoreId && item.batch === row.batch && item.country === row.country && item.keywordNormalized === row.keywordNormalized) {
+          related.push(item);
+        }
+      });
+    });
+    related.sort((a, b) => parseDate(a.date) - parseDate(b.date));
+    const dates = [...new Set(related.map(item => item.date))];
+    const ranks = related.map(item => item.rank).filter(Number.isFinite);
+    return {
+      history: related,
+      firstSeenDate: dates[0] || row.date,
+      latestDate: dates[dates.length - 1] || row.date,
+      occurrenceDays: dates.length,
+      bestRank: ranks.length ? Math.min(...ranks) : null,
+      latestRank: related.slice().reverse().find(item => Number.isFinite(item.rank))?.rank ?? row.rank
+    };
+  }
+
+  function getFilteredQimaiRows() {
+    const snapshots = getQimaiSnapshots();
+    let rows = dedupeQimaiRows(snapshots, iosCategory);
+    if (iosFilters.app) rows = rows.filter(item => item.app === iosFilters.app);
+    if (iosFilters.batch) rows = rows.filter(item => item.batch === iosFilters.batch);
+    if (iosFilters.country) rows = rows.filter(item => item.country === iosFilters.country);
+    if (iosFilters.date) rows = rows.filter(item => item.date === iosFilters.date);
+    const sourceQuery = iosFilters.source.trim().toLowerCase();
+    if (sourceQuery) rows = rows.filter(item => item.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery)));
+    const keywordQuery = iosFilters.keyword.trim().toLowerCase();
+    if (keywordQuery) rows = rows.filter(item => item.keyword.toLowerCase().includes(keywordQuery));
+    return rows.sort((a, b) => {
+      const countA = Number.isFinite(a.resultCount) ? a.resultCount : -Infinity;
+      const countB = Number.isFinite(b.resultCount) ? b.resultCount : -Infinity;
+      if (countA !== countB) return countB - countA;
+      const rankA = Number.isFinite(a.rank) ? a.rank : Number.MAX_SAFE_INTEGER;
+      const rankB = Number.isFinite(b.rank) ? b.rank : Number.MAX_SAFE_INTEGER;
+      return rankA - rankB || a.keyword.localeCompare(b.keyword);
+    });
+  }
+
+  function selectOptions(element, values, selected, allLabel) {
+    const unique = [...new Set(values.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+    if (selected && !unique.includes(selected)) selected = '';
+    element.innerHTML = [`<option value="">${allLabel}</option>`, ...unique.map(value => `<option value="${encode(value)}">${escapeHtml(value)}</option>`)].join('');
+    element.value = selected ? encode(selected) : '';
+    return selected;
+  }
+
+  function renderIosSelectors() {
+    const snapshots = getQimaiSnapshots();
+    iosFilters.app = selectOptions(document.getElementById('iosAppSelect'), snapshots.map(item => item.app), iosFilters.app, '全部 App');
+    const appScoped = iosFilters.app ? snapshots.filter(item => item.app === iosFilters.app) : snapshots;
+    iosFilters.batch = selectOptions(document.getElementById('iosBatchSelect'), appScoped.map(item => item.batch), iosFilters.batch, '全部批次');
+    const batchScoped = iosFilters.batch ? appScoped.filter(item => item.batch === iosFilters.batch) : appScoped;
+    iosFilters.country = selectOptions(document.getElementById('iosCountrySelect'), batchScoped.map(item => item.country), iosFilters.country, '全部国家');
+    const countryScoped = iosFilters.country ? batchScoped.filter(item => item.country === iosFilters.country) : batchScoped;
+    const dates = countryScoped.map(item => item.date).sort((a, b) => parseDate(b) - parseDate(a));
+    iosFilters.date = selectOptions(document.getElementById('iosDateSelect'), dates, iosFilters.date, '全部日期');
+    persistIosFilters();
+  }
+
+  function persistIosFilters() {
+    localStorage.setItem('aso_ios_filter_app_v200', iosFilters.app || '');
+    localStorage.setItem('aso_ios_filter_batch_v200', iosFilters.batch || '');
+    localStorage.setItem('aso_ios_filter_country_v200', iosFilters.country || '');
+    localStorage.setItem('aso_ios_filter_date_v200', iosFilters.date || '');
+  }
+
+  function rankChangeClass(status) {
+    if (status === 'up') return 'rank-up';
+    if (status === 'down') return 'rank-down';
+    if (status === 'new_entry') return 'rank-new';
+    return 'rank-drop';
+  }
+
+  function displayNumber(value) {
+    return Number.isFinite(value) ? value.toLocaleString() : '—';
+  }
+
+  function renderIosDashboard() {
+    renderIosSelectors();
+    document.querySelectorAll('[data-ios-category]').forEach(button => button.classList.toggle('active', button.dataset.iosCategory === iosCategory));
+    const allSnapshots = getQimaiSnapshots();
+    const rows = getFilteredQimaiRows();
+    document.getElementById('iosRecordBadge').textContent = `${rows.length} 条`;
+    document.getElementById('iosEmpty').classList.toggle('hidden', rows.length > 0);
+    document.getElementById('iosTableWrap').classList.toggle('hidden', rows.length === 0);
+
+    const latestDate = rows.map(item => item.date).sort((a, b) => parseDate(b) - parseDate(a))[0] || '—';
+    const uniqueSources = new Set(rows.flatMap(item => item.sourceKeywords));
+    document.getElementById('iosSummaryLine').innerHTML = [
+      `当前类型：${iosCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动'}`,
+      `去重结果：${rows.length}`,
+      `来源词：${uniqueSources.size}`,
+      `最新日期：${latestDate}`,
+      '排序：结果数降序'
+    ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+
+    const headers = ['日期','App','批次','国家','关键词','来源词','当前排名', iosCategory === 'new_entry' ? '状态' : '排名变动','指数','结果数','流行度','首次发现','出现天数','最佳排名'];
+    document.getElementById('iosTableHead').innerHTML = `<tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr>`;
+    document.getElementById('iosTableBody').innerHTML = rows.slice(0, 1000).map((row, index) => {
+      const stats = getQimaiTimelineStats(allSnapshots, row);
+      return `<tr>
+        <td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.app)}</td><td><span class="batch-tag">${escapeHtml(row.batch)}</span></td><td>${escapeHtml(row.country || '—')}</td>
+        <td><button class="keyword-link ios-keyword-detail" data-row-index="${index}">${escapeHtml(row.keyword)}</button></td>
+        <td class="source-list">${escapeHtml(row.sourceKeywords.join(', '))}</td><td>${displayNumber(row.rank)}</td>
+        <td class="${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(row.rankChangeText || '—')}</td>
+        <td>${displayNumber(row.index)}</td><td><b>${displayNumber(row.resultCount)}</b></td><td>${displayNumber(row.popularity)}</td>
+        <td>${escapeHtml(stats.firstSeenDate)}</td><td>${stats.occurrenceDays}</td><td>${displayNumber(stats.bestRank)}</td>
+      </tr>`;
+    }).join('');
+    document.querySelectorAll('.ios-keyword-detail').forEach(button => button.addEventListener('click', () => openKeywordDrawer(rows[Number(button.dataset.rowIndex)])));
+    renderOverview();
+    renderStorageSummary();
+  }
+
+  function openKeywordDrawer(row) {
+    if (!row) return;
+    const snapshots = getQimaiSnapshots();
+    const stats = getQimaiTimelineStats(snapshots, row);
+    document.getElementById('drawerKeyword').textContent = row.keyword;
+    document.getElementById('drawerSubtitle').textContent = `${row.app}｜${row.batch}｜${row.country || '—'}｜来源词：${row.sourceKeywords.join(', ')}`;
+    document.getElementById('drawerStats').innerHTML = [
+      ['首次发现', stats.firstSeenDate], ['最新日期', stats.latestDate], ['出现天数', `${stats.occurrenceDays} 天`], ['最佳排名', displayNumber(stats.bestRank)],
+      ['最新排名', displayNumber(stats.latestRank)], ['结果数', displayNumber(row.resultCount)], ['指数', displayNumber(row.index)], ['流行度', displayNumber(row.popularity)]
+    ].map(([label, value]) => `<div class="detail-item"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join('');
+    document.getElementById('drawerHistoryBody').innerHTML = stats.history.map(item => `<tr><td>${escapeHtml(item.date)}</td><td>${item.category === 'new_entry' ? '新进榜' : '排名变动'}</td><td>${displayNumber(item.rank)}</td><td class="${rankChangeClass(item.rankChangeStatus)}">${escapeHtml(item.rankChangeText || '—')}</td><td>${displayNumber(item.index)}</td><td>${displayNumber(item.resultCount)}</td><td>${displayNumber(item.popularity)}</td><td class="source-list">${escapeHtml(item.sourceKeywords.join(', '))}</td></tr>`).join('');
+
+    const mask = document.getElementById('keywordDrawerMask');
+    mask.classList.add('open');
+    mask.setAttribute('aria-hidden', 'false');
+    if (window.echarts) {
+      if (!iosTrendChart) iosTrendChart = echarts.init(document.getElementById('iosTrendChart'));
+      const dates = [...new Set(stats.history.map(item => item.date))].sort((a, b) => parseDate(a) - parseDate(b));
+      const rankByDate = {};
+      stats.history.forEach(item => { if (Number.isFinite(item.rank)) rankByDate[item.date] = item.rank; });
+      iosTrendChart.setOption({
+        tooltip: { trigger:'axis' }, grid:{ left:45,right:20,top:30,bottom:42,containLabel:true },
+        xAxis:{ type:'category',data:dates }, yAxis:{ type:'value',inverse:true,name:'排名',min:1 },
+        series:[{ name:'排名',type:'line',smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
+      }, true);
+      setTimeout(() => iosTrendChart.resize(), 30);
+    }
+  }
+
+  function closeKeywordDrawer() {
+    const mask = document.getElementById('keywordDrawerMask');
+    mask.classList.remove('open');
+    mask.setAttribute('aria-hidden', 'true');
+  }
+
+  function computeStOverview() {
+    const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const groups = {};
+    records.forEach(item => { const key = itemKey(item); if (!groups[key]) groups[key] = []; groups[key].push(item); });
+    let up = 0, down = 0, flat = 0;
+    Object.values(groups).forEach(group => {
+      group.sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+      if (group.length < 2) return;
+      const diff = Number(group[0].Rank) - Number(group[group.length - 1].Rank);
+      if (diff > 0) up += 1; else if (diff < 0) down += 1; else flat += 1;
+    });
+    const dates = records.map(item => item.Date).sort((a, b) => parseDate(b) - parseDate(a));
+    return { records, keywordCount:Object.keys(groups).length, up, down, flat, latestDate:dates[0] || '' };
+  }
+
+  function latestQimaiRowsByCategory(category) {
+    const snapshots = getQimaiSnapshots();
+    const latestDate = snapshots.map(item => item.date).sort((a, b) => parseDate(b) - parseDate(a))[0] || '';
+    const scoped = latestDate ? snapshots.filter(item => item.date === latestDate) : [];
+    return { latestDate, rows:dedupeQimaiRows(scoped, category) };
+  }
+
+  function formatDateTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return '—';
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+  }
+
+  function renderOverview() {
+    const st = computeStOverview();
+    const changed = latestQimaiRowsByCategory('rank_changed');
+    const newEntries = latestQimaiRowsByCategory('new_entry');
+    const snapshots = getQimaiSnapshots();
+    const logs = getSyncLogs();
+    const lastSync = logs[0]?.at || snapshots[0]?.createdAt || '';
+    const latestDate = [st.latestDate, changed.latestDate, newEntries.latestDate].filter(Boolean).sort((a, b) => parseDate(b) - parseDate(a))[0] || '';
+
+    document.getElementById('metricStKeywords').textContent = st.keywordCount.toLocaleString();
+    document.getElementById('metricStUp').textContent = st.up.toLocaleString();
+    document.getElementById('metricStUpNote').textContent = `下降 ${st.down}｜不变 ${st.flat}`;
+    document.getElementById('metricIosChanged').textContent = changed.rows.length.toLocaleString();
+    document.getElementById('metricIosChangedNote').textContent = changed.latestDate ? `${changed.latestDate}，去重后` : '暂无七麦数据';
+    document.getElementById('metricIosNew').textContent = newEntries.rows.length.toLocaleString();
+    document.getElementById('metricIosNewNote').textContent = newEntries.latestDate ? `${newEntries.latestDate}，去重后` : '暂无七麦数据';
+    document.getElementById('metricSnapshots').textContent = snapshots.length.toLocaleString();
+    document.getElementById('metricSnapshotsNote').textContent = `${new Set(snapshots.map(item => item.app)).size} 个 iOS App`;
+    document.getElementById('metricLastSync').textContent = formatDateTime(lastSync);
+    document.getElementById('overviewLatestDate').textContent = latestDate ? `最新数据 ${latestDate}` : '暂无同步';
+
+    document.getElementById('overviewChangeSummary').innerHTML = [
+      ['Sensor Tower', `上涨 ${st.up}｜下降 ${st.down}｜不变 ${st.flat}`, st.records.length ? 'ok' : 'warn'],
+      ['iOS 排名变动', `${changed.rows.length} 个去重关键词｜${changed.latestDate || '暂无日期'}`, changed.rows.length ? 'ok' : 'warn'],
+      ['iOS 新进榜', `${newEntries.rows.length} 个去重关键词｜${newEntries.latestDate || '暂无日期'}`, newEntries.rows.length ? 'ok' : 'warn']
+    ].map(([name, detail, status]) => `<div class="status-row"><div class="status-name">${name}</div><div class="status-detail">${detail}</div><span class="status-pill ${status}">${status === 'ok' ? '有数据' : '待同步'}</span></div>`).join('');
+
+    const sourceRows = [
+      ['Sensor Tower', `${st.records.length} 条记录｜最近 ${st.latestDate || '—'}`, st.records.length],
+      ['七麦·排名变动', `${changed.rows.length} 条（最新日去重）`, changed.rows.length],
+      ['七麦·新进榜', `${newEntries.rows.length} 条（最新日去重）`, newEntries.rows.length]
+    ];
+    document.getElementById('overviewSourceStatus').innerHTML = sourceRows.map(([name, detail, ok]) => `<div class="status-row"><div class="status-name">${name}</div><div class="status-detail">${detail}</div><span class="status-pill ${ok ? 'ok' : 'warn'}">${ok ? '正常' : '暂无数据'}</span></div>`).join('');
+  }
+
+  function showPage(pageId) {
+    const valid = ['overviewSection','stSection','iosSection','dataSection'];
+    activePage = valid.includes(pageId) ? pageId : 'overviewSection';
+    localStorage.setItem('aso_active_page_v200', activePage);
+    document.querySelectorAll('.page-section').forEach(section => section.classList.toggle('active', section.id === activePage));
+    document.querySelectorAll('.nav-btn').forEach(button => button.classList.toggle('active', button.dataset.page === activePage));
+    if (activePage === 'stSection' && chart) setTimeout(() => chart.resize(), 30);
+    if (activePage === 'iosSection') renderIosDashboard();
+    if (activePage === 'overviewSection') renderOverview();
+    if (activePage === 'dataSection') renderStorageSummary();
+  }
+
+  function exportUnifiedData() {
+    const payload = {
+      version:DASHBOARD_VERSION, exportedAt:new Date().toISOString(),
+      st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()) },
+      qimai:{ snapshots:getQimaiSnapshots() }, syncLogs:getSyncLogs()
+    };
+    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }), `aso-data-center-backup-${new Date().toISOString().slice(0,10)}.json`);
+  }
+
+  function importUnifiedData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.st?.data) mergeIncomingData(parsed.st.data);
+        else if (Array.isArray(parsed.data)) mergeIncomingData(parsed.data);
+        if (parsed.st?.notes) mergeIncomingNotes(parsed.st.notes);
+        else if (Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
+        if (parsed.qimai?.snapshots || parsed.snapshots || parsed.changedResults || parsed.qimaiState) mergeQimaiPayload(parsed, 'import');
+        if (Array.isArray(parsed.syncLogs)) localStorage.setItem(SYNC_LOG_KEY, JSON.stringify([...parsed.syncLogs, ...getSyncLogs()].slice(0,200)));
+        renderDashboard(); renderIosDashboard(); renderOverview(); renderStorageSummary();
+        alert('统一备份导入完成，原数据未删除。');
+      } catch (error) { alert(`导入失败：${error.message}`); }
+    };
+    reader.readAsText(file);
+  }
+
+  function importQimaiFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const count = mergeQimaiPayload(parsed, 'import');
+        renderIosDashboard(); renderOverview(); renderStorageSummary();
+        alert(`已合并 ${count} 个七麦快照。`);
+      } catch (error) { alert(`七麦数据导入失败：${error.message}`); }
+    };
+    reader.readAsText(file);
+  }
+
+  async function exportIosExcel() {
+    if (!window.ExcelJS) return alert('ExcelJS 尚未加载，请检查网络后重试。');
+    const snapshots = getQimaiSnapshots();
+    if (!snapshots.length) return alert('暂无 iOS 七麦数据。');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ASO 数据中心';
+    const categories = [
+      ['相关词_排名变动','rank_changed'], ['相关词_新进榜','new_entry']
+    ];
+    categories.forEach(([sheetName, category]) => {
+      const sheet = workbook.addWorksheet(sheetName, { views:[{state:'frozen',ySplit:1}] });
+      sheet.columns = [
+        {header:'日期',key:'date',width:13},{header:'App',key:'app',width:24},{header:'App Store ID',key:'appStoreId',width:15},{header:'批次',key:'batch',width:18},{header:'国家',key:'country',width:9},
+        {header:'关键词',key:'keyword',width:28},{header:'来源词',key:'sourceKeywords',width:30},{header:'排名',key:'rank',width:10},{header:'排名变动',key:'rankChangeText',width:13},
+        {header:'指数',key:'index',width:11},{header:'结果数',key:'resultCount',width:13},{header:'流行度',key:'popularity',width:11},{header:'首次发现',key:'firstSeenDate',width:13},{header:'出现天数',key:'occurrenceDays',width:11},{header:'最佳排名',key:'bestRank',width:11}
+      ];
+      const rows = dedupeQimaiRows(snapshots, category).sort((a,b)=>(b.resultCount??-Infinity)-(a.resultCount??-Infinity));
+      rows.forEach(row => { const stats=getQimaiTimelineStats(snapshots,row); sheet.addRow({...row,sourceKeywords:row.sourceKeywords.join(', '),firstSeenDate:stats.firstSeenDate,occurrenceDays:stats.occurrenceDays,bestRank:stats.bestRank}); });
+      const header=sheet.getRow(1); header.font={bold:true,color:{argb:'FFFFFFFF'}}; header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4299E1'}}; header.alignment={vertical:'middle',horizontal:'center'};
+      sheet.autoFilter={from:'A1',to:'O1'};
+    });
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadBlob(new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `iOS七麦关键词追踪_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  function renderStorageSummary() {
+    const st = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const snapshots = getQimaiSnapshots();
+    const changedCount = dedupeQimaiRows(snapshots,'rank_changed').length;
+    const newCount = dedupeQimaiRows(snapshots,'new_entry').length;
+    const logs = getSyncLogs();
+    const rows = [
+      ['Sensor Tower', `${st.length.toLocaleString()} 条原始排名记录`, MASTER_KEY],
+      ['iOS 七麦快照', `${snapshots.length.toLocaleString()} 个日期快照`, QIMAI_KEY],
+      ['iOS 排名变动', `${changedCount.toLocaleString()} 条跨日期去重记录`, 'rank_changed'],
+      ['iOS 新进榜', `${newCount.toLocaleString()} 条跨日期去重记录`, 'new_entry'],
+      ['同步日志', `${logs.length.toLocaleString()} 条`, SYNC_LOG_KEY]
+    ];
+    document.getElementById('storageSummary').innerHTML = rows.map(([name,note,key]) => `<div class="storage-row"><div class="storage-key">${name}</div><div class="storage-note">${note}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('');
+  }
+
+  function initDataCenterEvents() {
+    document.querySelectorAll('.nav-btn').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
+    document.querySelectorAll('[data-ios-category]').forEach(button => button.addEventListener('click', () => {
+      iosCategory = button.dataset.iosCategory; localStorage.setItem('aso_ios_category_v200', iosCategory); renderIosDashboard();
+    }));
+    [['iosAppSelect','app'],['iosBatchSelect','batch'],['iosCountrySelect','country'],['iosDateSelect','date']].forEach(([id,key]) => {
+      document.getElementById(id).addEventListener('change', event => { iosFilters[key] = event.target.value ? decode(event.target.value) : ''; if (key==='app'){iosFilters.batch='';iosFilters.country='';iosFilters.date='';} if(key==='batch'){iosFilters.country='';iosFilters.date='';} if(key==='country'){iosFilters.date='';} renderIosDashboard(); });
+    });
+    document.getElementById('iosSourceInput').addEventListener('input', event => { iosFilters.source = event.target.value; renderIosDashboard(); });
+    document.getElementById('iosKeywordInput').addEventListener('input', event => { iosFilters.keyword = event.target.value; renderIosDashboard(); });
+    document.getElementById('drawerCloseBtn').addEventListener('click', closeKeywordDrawer);
+    document.getElementById('keywordDrawerMask').addEventListener('click', event => { if (event.target.id === 'keywordDrawerMask') closeKeywordDrawer(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeKeywordDrawer(); });
+    document.getElementById('exportUnifiedBtn').addEventListener('click', exportUnifiedData);
+    document.getElementById('exportIosExcelBtn').addEventListener('click', exportIosExcel);
+    document.getElementById('importUnifiedBtn').addEventListener('click', () => document.getElementById('importUnifiedFile').click());
+    document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
+    document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
+    document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
+    document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
+    document.getElementById('clearSyncLogsBtn').addEventListener('click', () => { if(!confirm('确定清空同步日志吗？关键词数据不会删除。'))return; localStorage.removeItem(SYNC_LOG_KEY); renderOverview(); renderStorageSummary(); });
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     migrateExistingData();
     receiveUrlData();
     renderDashboard();
+    initDataCenterEvents();
+    renderIosDashboard();
+    renderOverview();
+    renderStorageSummary();
+    showPage(activePage);
 
     document.getElementById('appGroupSelect').addEventListener('change', event => {
       selectedAppGroup = event.target.value ? decode(event.target.value) : '';
@@ -1110,10 +1835,12 @@
       selectedBatches = [];
       selectedItems = [];
       renderDashboard();
+      renderOverview();
+      renderStorageSummary();
     });
   });
 
-  window.addEventListener('resize', () => chart.resize());
+  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); });
 </script>
 </body>
 </html>
