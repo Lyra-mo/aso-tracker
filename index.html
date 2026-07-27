@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.1</title>
+  <title>ASO 数据中心 v2.1.2</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -37,6 +37,7 @@
     .capture-meta { display:block; color:#718096; font-size:10px; margin-top:2px; }
     .checkpoint.late { color:#c05621; }
     .checkpoint.backfill { color:#2f855a; }
+    .checkpoint.waiting-data { color:#a16207; font-weight:600; }
     .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
     .note-day-btn { border: 0; background: transparent; cursor: pointer; margin-left: 3px; padding: 0 2px; font-size: 12px; }
     .note-day-btn:hover { transform: scale(1.08); }
@@ -167,7 +168,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.1</span>
+      <span class="version-badge">v2.1.2</span>
     </header>
 
     <main class="page-wrap">
@@ -314,7 +315,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.1';
+  const DASHBOARD_VERSION = '2.1.2';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -427,7 +428,9 @@
       const derivedDelay = capturedDate && scheduledDate ? Math.max(0, diffDays(capturedDate, scheduledDate)) : 0;
       const delayDays = item.DelayDays === null ? derivedDelay : item.DelayDays;
       let captureStatus = item.CaptureStatus;
-      if (!captureStatus) {
+      if (item.Date && scheduledDate && parseDate(item.Date) < parseDate(scheduledDate)) {
+        captureStatus = 'data_waiting';
+      } else if (!captureStatus) {
         if (!item.CapturedAt && !item.ScheduledDate) captureStatus = 'legacy';
         else if (item.RunMode === 'manual_snapshot') captureStatus = 'manual_snapshot';
         else if (item.Date === scheduledDate && delayDays > 0) captureStatus = 'completed_backfill';
@@ -690,6 +693,7 @@
     if (record.CaptureStatus === 'manual_snapshot') return '<span class="checkpoint">手动</span>';
     const checkpointText = record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`;
     if (record.CaptureStatus === 'completed_backfill') return `<span class="checkpoint backfill">${checkpointText}·补抓</span>`;
+    if (record.CaptureStatus === 'data_waiting') return `<span class="checkpoint waiting-data">${checkpointText}·待更新</span>`;
     if (record.CaptureStatus === 'completed_late') return `<span class="checkpoint late">${checkpointText}·晚${Number(record.DelayDays)||0}天</span>`;
     if (record.CaptureStatus === 'legacy') return `<span class="checkpoint">${checkpointText}·旧版</span>`;
     return `<span class="checkpoint">${checkpointText}</span>`;
@@ -700,6 +704,7 @@
     const parts = [];
     if (record.ScheduledDate && record.ScheduledDate !== record.Date) parts.push(`计划 ${record.ScheduledDate}`);
     if (record.CaptureStatus === 'completed_backfill' && capturedDate && capturedDate !== record.Date) parts.push(`实抓 ${capturedDate}`);
+    if (record.CaptureStatus === 'data_waiting') parts.push('页面数据尚未更新');
     if (record.CaptureStatus === 'completed_late' && capturedDate) parts.push(`实抓 ${capturedDate}`);
     return parts.length ? `<span class="capture-meta">${parts.map(escapeHtml).join(' · ')}</span>` : '';
   }
