@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.5</title>
+  <title>ASO 数据中心 v2.1.6</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -181,7 +181,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.5</span>
+      <span class="version-badge">v2.1.6</span>
     </header>
 
     <main class="page-wrap">
@@ -388,14 +388,31 @@
     return CHECKPOINTS.includes(day) ? day : 0;
   }
 
-  // ST 历史补抓的数据归属日期应使用计划日期，而不是实际执行日期。
-  // 旧版本曾把 CapturedAt 当成 Date/DataDate，导致看板把 7/27 实抓显示成 7/27 排名。
-  // 对 completed_backfill 记录统一回归 ScheduledDate；CapturedAt 仅用于历史明细展示。
+  // ST 节点排名的归属日期使用计划节点日期，实际执行日期仅用于历史说明。
+  // 例如：D3 计划 7/26、7/27 才实抓，主表/图表仍显示 7/26；历史明细显示“实抓 7/27”。
+  // v2.1.3 只处理 completed_backfill，旧插件传入 completed_late 时仍会错误显示实抓日期。
   function resolveStDataDate(item = {}) {
     const scheduledDate = toDateKey(item.ScheduledDate || item.scheduledDate || '');
+    const rawDataDate = toDateKey(item.DataDate || item.dataDate || item.Date || item.date || '');
     const captureStatus = String(item.CaptureStatus || item.captureStatus || '').trim();
-    if (captureStatus === 'completed_backfill' && scheduledDate) return scheduledDate;
-    return toDateKey(item.DataDate || item.dataDate || item.Date || item.date || '');
+    const runMode = String(item.RunMode || item.runMode || '').trim();
+    const checkpointValue = Number(item.Checkpoint ?? item.checkpoint);
+    const isCheckpoint = CHECKPOINTS.includes(checkpointValue);
+
+    // 页面数据尚未更新时，保留页面真实日期，避免把旧数据伪装成目标节点数据。
+    if (captureStatus === 'data_waiting') return rawDataDate;
+
+    // 手动快照不属于固定节点，继续使用实际数据日期。
+    if (runMode === 'manual_snapshot' || captureStatus === 'manual_snapshot') return rawDataDate;
+
+    // 固定节点（D0/D3/D7/D14/D28）一律按计划日期归档。
+    // completed_late 在此场景表示“晚一天执行”，不是排名属于晚一天。
+    if (scheduledDate && isCheckpoint) return scheduledDate;
+
+    // 兼容旧记录：有明确计划日期且被标记为补抓/延迟抓取时，也按计划日期展示。
+    if (scheduledDate && ['completed_backfill', 'completed_late'].includes(captureStatus)) return scheduledDate;
+
+    return rawDataDate;
   }
 
   function normalizeRecords(records) {
@@ -453,6 +470,9 @@
       let captureStatus = item.CaptureStatus;
       if (item.Date && scheduledDate && parseDate(item.Date) < parseDate(scheduledDate)) {
         captureStatus = 'data_waiting';
+      } else if (captureStatus === 'completed_late' && item.Date === scheduledDate && delayDays > 0) {
+        // 旧插件把“晚一天执行”记为 completed_late；归档日期校正后应显示为补抓。
+        captureStatus = 'completed_backfill';
       } else if (!captureStatus) {
         if (!item.CapturedAt && !item.ScheduledDate) captureStatus = 'legacy';
         else if (item.RunMode === 'manual_snapshot') captureStatus = 'manual_snapshot';
