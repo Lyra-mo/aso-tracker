@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.3</title>
+  <title>ASO 数据中心 v2.1.4</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -168,7 +168,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.3</span>
+      <span class="version-badge">v2.1.4</span>
     </header>
 
     <main class="page-wrap">
@@ -315,7 +315,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.3';
+  const DASHBOARD_VERSION = '2.1.4';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -1532,7 +1532,8 @@
     const map = new Map(existing.map(item => [qimaiSnapshotKey(item), item]));
     incoming.forEach(item => map.set(qimaiSnapshotKey(item), item));
     saveQimaiSnapshots([...map.values()]);
-    addSyncLog({ source: 'qimai_ios', status: 'success', message: `${origin === 'plugin_url' ? '插件同步' : '导入'} ${incoming.length} 个七麦快照。` });
+    const originLabel = origin === 'plugin_direct' ? '插件自动同步' : origin === 'plugin_url' ? '插件兼容同步' : '导入';
+    addSyncLog({ source: 'qimai_ios', status: 'success', message: `${originLabel} ${incoming.length} 个七麦快照。` });
     return incoming.length;
   }
 
@@ -2058,6 +2059,62 @@
     document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
     document.getElementById('clearSyncLogsBtn').addEventListener('click', () => { if(!confirm('确定清空同步日志吗？关键词数据不会删除。'))return; localStorage.removeItem(SYNC_LOG_KEY); renderOverview(); renderStorageSummary(); });
   }
+
+
+  // 供 Chrome 扩展在看板加载完成后直接调用。返回确认结果，插件据此标记“已同步”。
+  window.ASO_DASHBOARD_RECEIVE = async function(payload = {}) {
+    try {
+      const source = String(payload.source || '').toLowerCase();
+      if (payload.verifySnapshot) {
+        const normalized = normalizeQimaiSnapshot(payload.verifySnapshot);
+        if (!normalized) return { ok:false, code:'invalid_snapshot', message:'快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
+        const exists = getQimaiSnapshots().some(item => qimaiSnapshotKey(item) === qimaiSnapshotKey(normalized));
+        return {
+          ok:exists,
+          code:exists ? 'verified' : 'not_found',
+          message:exists ? '看板已保存该快照。' : '看板中尚未找到该快照。',
+          dashboardVersion:DASHBOARD_VERSION,
+          snapshotKey:qimaiSnapshotKey(normalized)
+        };
+      }
+
+      const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' ||
+        Boolean(payload.snapshot || payload.snapshots || payload.qimaiState || payload.changedResults || payload.newEntryResults);
+      if (!looksLikeQimai) {
+        return { ok:false, code:'unsupported_source', message:'当前接收器仅处理七麦 iOS 快照。', dashboardVersion:DASHBOARD_VERSION };
+      }
+
+      const count = mergeQimaiPayload(payload, 'plugin_direct');
+      renderIosDashboard();
+      renderOverview();
+      renderStorageSummary();
+      const snapshots = extractQimaiSnapshots(payload).map(normalizeQimaiSnapshot).filter(Boolean);
+      return {
+        ok:true,
+        code:'saved',
+        message:`已保存 ${count} 个七麦快照。`,
+        count,
+        dashboardVersion:DASHBOARD_VERSION,
+        snapshotKeys:snapshots.map(qimaiSnapshotKey),
+        receivedAt:new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('插件自动同步处理失败：', error);
+      addSyncLog({ source:'qimai_ios', status:'failed', message:error.message || String(error) });
+      renderOverview();
+      renderStorageSummary();
+      return { ok:false, code:'save_failed', message:error.message || String(error), dashboardVersion:DASHBOARD_VERSION };
+    }
+  };
+
+  window.ASO_DASHBOARD_STATUS = function() {
+    return {
+      ok:true,
+      dashboardVersion:DASHBOARD_VERSION,
+      qimaiSnapshots:getQimaiSnapshots().length,
+      lastSync:getSyncLogs()[0]?.at || ''
+    };
+  };
 
   window.addEventListener('DOMContentLoaded', () => {
     migrateExistingData();
