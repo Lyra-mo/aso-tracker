@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.2</title>
+  <title>ASO 数据中心 v2.1.3</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -168,7 +168,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.2</span>
+      <span class="version-badge">v2.1.3</span>
     </header>
 
     <main class="page-wrap">
@@ -315,7 +315,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.2';
+  const DASHBOARD_VERSION = '2.1.3';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -375,24 +375,34 @@
     return CHECKPOINTS.includes(day) ? day : 0;
   }
 
+  // ST 历史补抓的数据归属日期应使用计划日期，而不是实际执行日期。
+  // 旧版本曾把 CapturedAt 当成 Date/DataDate，导致看板把 7/27 实抓显示成 7/27 排名。
+  // 对 completed_backfill 记录统一回归 ScheduledDate；CapturedAt 仅用于历史明细展示。
+  function resolveStDataDate(item = {}) {
+    const scheduledDate = toDateKey(item.ScheduledDate || item.scheduledDate || '');
+    const captureStatus = String(item.CaptureStatus || item.captureStatus || '').trim();
+    if (captureStatus === 'completed_backfill' && scheduledDate) return scheduledDate;
+    return toDateKey(item.DataDate || item.dataDate || item.Date || item.date || '');
+  }
+
   function normalizeRecords(records) {
     const list = Array.isArray(records) ? records : [];
     const earliestByApp = {};
 
     list.forEach(item => {
       const app = String(item.App || '未命名 App').trim();
-      const dataDate = toDateKey(item.DataDate || item.Date);
+      const dataDate = resolveStDataDate(item);
       if (!dataDate) return;
       if (!earliestByApp[app] || parseDate(dataDate) < parseDate(earliestByApp[app])) earliestByApp[app] = dataDate;
     });
 
     const provisional = list.map(item => {
       const app = String(item.App || '未命名 App').trim();
-      const dataDate = toDateKey(item.DataDate || item.Date);
+      const dataDate = resolveStDataDate(item);
       const defaultFirstDate = earliestByApp[app] || dataDate;
       const batch = String(item.Batch || item.batchName || `T1-${compactDate(defaultFirstDate)}`).trim();
       const explicitCheckpoint = CHECKPOINTS.includes(Number(item.Checkpoint)) ? Number(item.Checkpoint) : null;
-      const delayValue = Number(item.DelayDays);
+      const delayValue = Number(item.DelayDays ?? item.delayDays);
 
       return {
         ...item,
@@ -402,7 +412,7 @@
         Rank: String(item.Rank || '').trim(),
         Date: dataDate,
         DataDate: dataDate,
-        ScheduledDate: item.ScheduledDate ? toDateKey(item.ScheduledDate) : '',
+        ScheduledDate: (item.ScheduledDate || item.scheduledDate) ? toDateKey(item.ScheduledDate || item.scheduledDate) : '',
         CapturedAt: item.CapturedAt || item.capturedAt || '',
         DelayDays: Number.isFinite(delayValue) ? delayValue : null,
         CaptureStatus: String(item.CaptureStatus || item.captureStatus || '').trim(),
@@ -702,7 +712,11 @@
   function stCaptureMeta(record) {
     const capturedDate = record.CapturedAt ? toDateKey(record.CapturedAt) : '';
     const parts = [];
-    if (record.ScheduledDate && record.ScheduledDate !== record.Date) parts.push(`计划 ${record.ScheduledDate}`);
+    if (record.CaptureStatus === 'completed_backfill' && record.ScheduledDate) {
+      parts.push(`计划 ${record.ScheduledDate}`);
+    } else if (record.ScheduledDate && record.ScheduledDate !== record.Date) {
+      parts.push(`计划 ${record.ScheduledDate}`);
+    }
     if (record.CaptureStatus === 'completed_backfill' && capturedDate && capturedDate !== record.Date) parts.push(`实抓 ${capturedDate}`);
     if (record.CaptureStatus === 'data_waiting') parts.push('页面数据尚未更新');
     if (record.CaptureStatus === 'completed_late' && capturedDate) parts.push(`实抓 ${capturedDate}`);
