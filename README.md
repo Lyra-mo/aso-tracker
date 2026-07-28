@@ -1,34 +1,26 @@
-# ASO 数据中心 v2.0.0
+# ASO 数据中心 v2.2.0 Preview
 
-## 上传到 GitHub
+## 新增页面
 
-将本目录中的三个文件上传到 `feature/ios-dashboard-v1` 分支根目录，并覆盖同名文件：
+- iOS 点点
+  - 相关词＋排名变动
+  - 相关词＋新进榜
+  - 同一关键词跨日期合并
+  - 来源词、最新日期、最新排名变动、指数、排名与历史追踪
+- 交叉验证
+  - 七麦与点点是否同时发现同一关键词
+  - 两边排名方向是否一致
+  - 七麦/点点排名、变动和指数并列展示
+  - 不对两个平台的指数或排名做平均
 
-- `index.html`
-- `favicon-32x32.png`
-- `favicon-48x48.png`
+## 数据存储
 
-不要删除原仓库的 README。先在测试分支部署验证，再合并到 `main`。
+- 七麦：`aso_ios_qimai_snapshots_v200`
+- 点点：`aso_ios_diandian_snapshots_v220`
+- ST：继续使用 `aso_master_data`
 
-## 数据兼容
+三类数据分开保存。点点插件同步来源标识为 `diandian_ios`。
 
-- Sensor Tower 继续使用 `aso_master_data`，原历史数据不会因页面升级而迁移或清空。
-- ST 备注继续使用 `aso_notes_v110`。
-- iOS 七麦使用新键 `aso_ios_qimai_snapshots_v200`。
-- 同一天、同 App、同批次、同国家、同关键词、同类别会去重，并合并来源词。
-- 不同日期不会互相覆盖，用于形成 14 天关键词轨迹。
+## 部署
 
-## 七麦数据导入
-
-当前版本支持直接导入插件导出的：
-
-`七麦_14天历史_YYYY-MM-DD.json`
-
-进入“数据管理” → “导入七麦 14 天历史”。
-
-同时预留 URL 自动接收格式：
-
-- `?qimai=<URL编码后的JSON>`
-- `?source=qimai_ios&data=<URL编码后的JSON>`
-
-后续插件同步版可直接使用。
+将根目录中的 `index.html`、`favicon-32x32.png`、`favicon-48x48.png` 上传到 GitHub，最终合并到 Render 绑定的 `main` 分支。

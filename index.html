@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.7</title>
+  <title>ASO 数据中心 v2.2.0 Preview</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -176,16 +176,18 @@
         <div class="brand-icon">📊</div>
         <div>
           <div class="brand-title">ASO 数据中心</div>
-          <div class="brand-subtitle">Sensor Tower 日级趋势 · 七麦 iOS 关键词发现</div>
+          <div class="brand-subtitle">Sensor Tower 日级趋势 · 七麦 / 点点 iOS 关键词交叉验证</div>
         </div>
       </div>
       <nav class="main-nav" aria-label="主导航">
         <button class="nav-btn active" data-page="overviewSection">总览</button>
         <button class="nav-btn" data-page="stSection">Sensor Tower</button>
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
+        <button class="nav-btn" data-page="diandianSection">iOS 点点</button>
+        <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.7</span>
+      <span class="version-badge">v2.2.0 Preview</span>
     </header>
 
     <main class="page-wrap">
@@ -290,8 +292,49 @@
         </div>
       </section>
 
+
+      <section id="diandianSection" class="page-section">
+        <div class="page-heading"><div><h2>iOS 点点</h2><p>沿用七麦的分组展示：同一关键词合并为一行，保留来源词、最新指标和跨日期历史。</p></div><div class="version-badge" id="ddRecordBadge">0 条</div></div>
+        <div class="control-panel">
+          <div class="section-tabs">
+            <button class="section-tab active" data-dd-category="rank_changed">相关词＋排名变动</button>
+            <button class="section-tab" data-dd-category="new_entry">相关词＋新进榜</button>
+          </div>
+          <div class="ios-toolbar">
+            <div class="filter-field"><label for="ddAppSelect">App</label><select id="ddAppSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="ddBatchSelect">测试批次</label><select id="ddBatchSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="ddCountrySelect">国家</label><select id="ddCountrySelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="ddDateSelect">抓取日期</label><select id="ddDateSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="ddSourceInput">来源词</label><input id="ddSourceInput" class="text-input" placeholder="例如 universal"></div>
+            <div class="filter-field"><label for="ddKeywordInput">结果关键词</label><input id="ddKeywordInput" class="text-input" placeholder="搜索关键词"></div>
+          </div>
+          <div class="summary-line" id="ddSummaryLine"></div>
+        </div>
+        <div id="ddEmpty" class="empty-box">暂无点点数据。插件抓取完成后会自动同步到这里。</div>
+        <div id="ddTableWrap" class="table-wrap hidden">
+          <table><thead id="ddTableHead"></thead><tbody id="ddTableBody"></tbody></table>
+        </div>
+      </section>
+
+      <section id="crossSection" class="page-section">
+        <div class="page-heading"><div><h2>iOS 关键词交叉验证</h2><p>比较七麦与点点是否同时发现同一关键词、排名方向是否一致。指数与排名不做平均。</p></div><div class="version-badge" id="crossRecordBadge">0 条</div></div>
+        <div class="control-panel">
+          <div class="ios-toolbar">
+            <div class="filter-field"><label for="crossAppSelect">App</label><select id="crossAppSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="crossBatchSelect">测试批次</label><select id="crossBatchSelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="crossCountrySelect">国家</label><select id="crossCountrySelect" class="filter-select"></select></div>
+            <div class="filter-field"><label for="crossKeywordInput">关键词</label><input id="crossKeywordInput" class="text-input" placeholder="搜索关键词"></div>
+          </div>
+          <div class="summary-line" id="crossSummaryLine"></div>
+        </div>
+        <div id="crossEmpty" class="empty-box">暂无可交叉验证的数据。需要七麦与点点至少一方有快照。</div>
+        <div id="crossTableWrap" class="table-wrap hidden">
+          <table><thead><tr><th>关键词</th><th>七麦</th><th>点点</th><th>七麦排名/变动</th><th>点点排名/变动</th><th>七麦指数</th><th>点点指数</th><th>验证结论</th></tr></thead><tbody id="crossTableBody"></tbody></table>
+        </div>
+      </section>
+
       <section id="dataSection" class="page-section">
-        <div class="page-heading"><div><h2>数据管理</h2><p>ST 与七麦分开存储、统一备份。清理操作也按来源分开，降低误删风险。</p></div></div>
+        <div class="page-heading"><div><h2>数据管理</h2><p>ST、七麦与点点分开存储、统一备份。清理操作也按来源分开，降低误删风险。</p></div></div>
         <div class="two-col">
           <div class="panel">
             <div class="panel-title"><h3>导入与导出</h3></div>
@@ -314,6 +357,7 @@
           <div class="panel-title"><h3>分来源清理</h3></div>
           <div class="data-actions">
             <button id="clearIosBtn" class="action-btn danger">清空 iOS 七麦数据</button>
+            <button id="clearDiandianBtn" class="action-btn danger">清空 iOS 点点数据</button>
             <button id="clearSyncLogsBtn" class="action-btn danger">清空同步日志</button>
           </div>
           <div class="hint">ST 数据请在 Sensor Tower 页面单独清理。清理前建议先导出全部 JSON。</div>
@@ -339,16 +383,18 @@
   const NOTES_KEY = 'aso_notes_v110';
   const CHECKPOINTS = [0, 3, 7, 14, 28];
   const QIMAI_KEY = 'aso_ios_qimai_snapshots_v200';
+  const DIANDIAN_KEY = 'aso_ios_diandian_snapshots_v220';
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.7';
+  const DASHBOARD_VERSION = '2.2.0-preview';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
   let iosOverviewTrendChart = null;
   let activePage = localStorage.getItem('aso_active_page_v200') || 'overviewSection';
   let iosCategory = localStorage.getItem('aso_ios_category_v200') || 'rank_changed';
+  let ddCategory = localStorage.getItem('aso_dd_category_v220') || 'rank_changed';
   const iosFilters = {
     app: localStorage.getItem('aso_ios_filter_app_v200') || '',
     batch: localStorage.getItem('aso_ios_filter_batch_v200') || '',
@@ -357,6 +403,8 @@
     source: '',
     keyword: ''
   };
+  const ddFilters = { app:'', batch:'', country:'', date:'', source:'', keyword:'' };
+  const crossFilters = { app:'', batch:'', country:'', keyword:'' };
   let selectedAppGroup = localStorage.getItem('selected_app_group') || '';
   let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
   let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
@@ -666,9 +714,10 @@
 
       if (encodedData) {
         const payload = JSON.parse(decodeURIComponent(encodedData));
-        const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' ||
-          Boolean(payload?.snapshot || payload?.snapshots || payload?.changedResults || payload?.newEntryResults);
-        if (looksLikeQimai) mergeQimaiPayload(payload, 'plugin_url');
+        const looksLikeDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload?.diandianState);
+        const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' || Boolean(payload?.qimaiState);
+        if (looksLikeDiandian) mergeDiandianPayload(payload, 'plugin_url');
+        else if (looksLikeQimai || payload?.snapshot || payload?.snapshots || payload?.changedResults || payload?.newEntryResults) mergeQimaiPayload(payload, 'plugin_url');
         else mergeIncomingData(payload);
         received = true;
       }
@@ -2116,13 +2165,15 @@
   }
 
   function showPage(pageId) {
-    const valid = ['overviewSection','stSection','iosSection','dataSection'];
+    const valid = ['overviewSection','stSection','iosSection','diandianSection','crossSection','dataSection'];
     activePage = valid.includes(pageId) ? pageId : 'overviewSection';
     localStorage.setItem('aso_active_page_v200', activePage);
     document.querySelectorAll('.page-section').forEach(section => section.classList.toggle('active', section.id === activePage));
     document.querySelectorAll('.nav-btn').forEach(button => button.classList.toggle('active', button.dataset.page === activePage));
     if (activePage === 'stSection' && chart) setTimeout(() => chart.resize(), 30);
     if (activePage === 'iosSection') renderIosDashboard();
+    if (activePage === 'diandianSection') renderDiandianDashboard();
+    if (activePage === 'crossSection') renderCrossValidation();
     if (activePage === 'overviewSection') renderOverview();
     if (activePage === 'dataSection') renderStorageSummary();
   }
@@ -2131,7 +2182,7 @@
     const payload = {
       version:DASHBOARD_VERSION, exportedAt:new Date().toISOString(),
       st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()) },
-      qimai:{ snapshots:getQimaiSnapshots() }, syncLogs:getSyncLogs()
+      qimai:{ snapshots:getQimaiSnapshots() }, diandian:{ snapshots:getDiandianSnapshots() }, syncLogs:getSyncLogs()
     };
     downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }), `aso-data-center-backup-${new Date().toISOString().slice(0,10)}.json`);
   }
@@ -2145,9 +2196,10 @@
         else if (Array.isArray(parsed.data)) mergeIncomingData(parsed.data);
         if (parsed.st?.notes) mergeIncomingNotes(parsed.st.notes);
         else if (Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
-        if (parsed.qimai?.snapshots || parsed.snapshots || parsed.changedResults || parsed.qimaiState) mergeQimaiPayload(parsed, 'import');
+        if (parsed.qimai?.snapshots || parsed.qimaiState) mergeQimaiPayload(parsed.qimai || parsed, 'import');
+        if (parsed.diandian?.snapshots || parsed.diandianState) mergeDiandianPayload(parsed.diandian || parsed, 'import');
         if (Array.isArray(parsed.syncLogs)) localStorage.setItem(SYNC_LOG_KEY, JSON.stringify([...parsed.syncLogs, ...getSyncLogs()].slice(0,200)));
-        renderDashboard(); renderIosDashboard(); renderOverview(); renderStorageSummary();
+        renderDashboard(); renderIosDashboard(); renderDiandianDashboard(); renderCrossValidation(); renderOverview(); renderStorageSummary();
         alert('统一备份导入完成，原数据未删除。');
       } catch (error) { alert(`导入失败：${error.message}`); }
     };
@@ -2195,17 +2247,228 @@
   function renderStorageSummary() {
     const st = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
     const snapshots = getQimaiSnapshots();
+    const ddSnapshots = getDiandianSnapshots();
     const changedCount = dedupeQimaiRows(snapshots,'rank_changed').length;
     const newCount = dedupeQimaiRows(snapshots,'new_entry').length;
+    const ddChangedCount = dedupeQimaiRows(ddSnapshots,'rank_changed').length;
+    const ddNewCount = dedupeQimaiRows(ddSnapshots,'new_entry').length;
     const logs = getSyncLogs();
     const rows = [
       ['Sensor Tower', `${st.length.toLocaleString()} 条原始排名记录`, MASTER_KEY],
       ['iOS 七麦快照', `${snapshots.length.toLocaleString()} 个日期快照`, QIMAI_KEY],
       ['iOS 排名变动', `${changedCount.toLocaleString()} 条跨日期去重记录`, 'rank_changed'],
       ['iOS 新进榜', `${newCount.toLocaleString()} 条跨日期去重记录`, 'new_entry'],
+      ['iOS 点点快照', `${ddSnapshots.length.toLocaleString()} 个日期快照`, DIANDIAN_KEY],
+      ['点点排名变动', `${ddChangedCount.toLocaleString()} 条跨日期去重记录`, 'diandian_rank_changed'],
+      ['点点新进榜', `${ddNewCount.toLocaleString()} 条跨日期去重记录`, 'diandian_new_entry'],
       ['同步日志', `${logs.length.toLocaleString()} 条`, SYNC_LOG_KEY]
     ];
     document.getElementById('storageSummary').innerHTML = rows.map(([name,note,key]) => `<div class="storage-row"><div class="storage-key">${name}</div><div class="storage-note">${note}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('');
+  }
+
+
+  // ---------------- iOS 点点与交叉验证 ----------------
+  function getDiandianSnapshots() {
+    const parsed = safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeDiandianSnapshot).filter(Boolean) : [];
+  }
+
+  function saveDiandianSnapshots(snapshots) {
+    const map = new Map();
+    (snapshots || []).map(normalizeDiandianSnapshot).filter(Boolean).forEach(snapshot => map.set(diandianSnapshotKey(snapshot), snapshot));
+    const sorted = [...map.values()].sort((a,b) => (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0));
+    localStorage.setItem(DIANDIAN_KEY, JSON.stringify(sorted));
+  }
+
+  function diandianSnapshotKey(snapshot) {
+    return [snapshot.app, snapshot.appStoreId, snapshot.batch, snapshot.country, snapshot.date]
+      .map(value => String(value || '').trim().toLowerCase()).join('__');
+  }
+
+  function normalizeDiandianSnapshot(snapshot) {
+    const normalized = normalizeQimaiSnapshot(snapshot);
+    if (!normalized) return null;
+    normalized.source = 'diandian_ios';
+    normalized.changedResults = normalized.changedResults.map((row,index) => ({
+      ...row,
+      source:'diandian_ios',
+      keywordUpdatedAt: snapshot.changedResults?.[index]?.keywordUpdatedAt || ''
+    }));
+    normalized.newEntryResults = normalized.newEntryResults.map((row,index) => ({
+      ...row,
+      source:'diandian_ios',
+      keywordUpdatedAt: snapshot.newEntryResults?.[index]?.keywordUpdatedAt || ''
+    }));
+    return normalized;
+  }
+
+  function extractDiandianSnapshots(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.snapshots)) return payload.snapshots;
+    if (payload.snapshot) return [payload.snapshot];
+    if (payload.diandianState) {
+      const state = payload.diandianState;
+      return [{
+        app:state.config?.app, appStoreId:state.config?.appStoreId, batch:state.config?.batch,
+        country:state.config?.country, date:state.config?.currentDate, compareDate:state.config?.compareDate,
+        day:state.config?.autoDay, status:state.status, changedResults:state.changedResults,
+        newEntryResults:state.newEntryResults, failures:state.failures, createdAt:state.completedAt || new Date().toISOString()
+      }];
+    }
+    if (payload.changedResults || payload.newEntryResults) return [payload];
+    return [];
+  }
+
+  function mergeDiandianPayload(payload, origin = 'import') {
+    const incoming = extractDiandianSnapshots(payload).map(normalizeDiandianSnapshot).filter(Boolean);
+    if (!incoming.length) throw new Error('数据中没有可识别的点点快照。');
+    const map = new Map(getDiandianSnapshots().map(item => [diandianSnapshotKey(item), item]));
+    incoming.forEach(item => map.set(diandianSnapshotKey(item), item));
+    saveDiandianSnapshots([...map.values()]);
+    const originLabel = origin === 'plugin_direct' ? '插件自动同步' : origin === 'plugin_url' ? '插件兼容同步' : '导入';
+    addSyncLog({ source:'diandian_ios', status:'success', message:`${originLabel} ${incoming.length} 个点点快照。` });
+    return incoming.length;
+  }
+
+  function getFilteredDiandianRows() {
+    let rows = dedupeQimaiRows(getDiandianSnapshots(), ddCategory);
+    if (ddFilters.app) rows = rows.filter(item => item.app === ddFilters.app);
+    if (ddFilters.batch) rows = rows.filter(item => item.batch === ddFilters.batch);
+    if (ddFilters.country) rows = rows.filter(item => item.country === ddFilters.country);
+    if (ddFilters.date) rows = rows.filter(item => item.date === ddFilters.date);
+    const sourceQuery = ddFilters.source.trim().toLowerCase();
+    if (sourceQuery) rows = rows.filter(item => item.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery)));
+    const keywordQuery = ddFilters.keyword.trim().toLowerCase();
+    if (keywordQuery) rows = rows.filter(item => item.keyword.toLowerCase().includes(keywordQuery));
+    return rows;
+  }
+
+  function fillSelect(id, values, current, allLabel) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    const options = [`<option value="">${escapeHtml(allLabel)}</option>`].concat(values.map(value => `<option value="${encode(value)}" ${value===current?'selected':''}>${escapeHtml(value)}</option>`));
+    element.innerHTML = options.join('');
+  }
+
+  function renderDiandianSelectors() {
+    const snapshots = getDiandianSnapshots();
+    const apps = [...new Set(snapshots.map(item => item.app))].sort();
+    if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
+    fillSelect('ddAppSelect', apps, ddFilters.app, '全部 App');
+    const scopedApp = ddFilters.app ? snapshots.filter(item => item.app === ddFilters.app) : snapshots;
+    const batches = [...new Set(scopedApp.map(item => item.batch))].sort();
+    if (ddFilters.batch && !batches.includes(ddFilters.batch)) ddFilters.batch = '';
+    fillSelect('ddBatchSelect', batches, ddFilters.batch, '全部批次');
+    const scopedBatch = ddFilters.batch ? scopedApp.filter(item => item.batch === ddFilters.batch) : scopedApp;
+    const countries = [...new Set(scopedBatch.map(item => item.country))].sort();
+    if (ddFilters.country && !countries.includes(ddFilters.country)) ddFilters.country = '';
+    fillSelect('ddCountrySelect', countries, ddFilters.country, '全部国家');
+    const scopedCountry = ddFilters.country ? scopedBatch.filter(item => item.country === ddFilters.country) : scopedBatch;
+    const dates = [...new Set(scopedCountry.map(item => item.date))].sort((a,b)=>parseDate(b)-parseDate(a));
+    if (ddFilters.date && !dates.includes(ddFilters.date)) ddFilters.date = '';
+    fillSelect('ddDateSelect', dates, ddFilters.date, '全部日期');
+  }
+
+  function renderDiandianHistoryChips(history, category) {
+    const items = [...(history || [])].slice(-5);
+    return `<div class="ios-history-chips">${items.map(item => {
+      const status = category === 'new_entry' ? '新进榜' : (item.rankChangeText || '—');
+      return `<span class="ios-history-chip"><b>${escapeHtml(String(item.date || '').slice(5))}</b><span class="${rankChangeClass(item.rankChangeStatus)}">${escapeHtml(status)}</span><span>指数 ${displayNumber(item.index)}</span></span>`;
+    }).join('')}</div>`;
+  }
+
+  function renderDiandianDashboard() {
+    renderDiandianSelectors();
+    document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
+    const rawRows = getFilteredDiandianRows();
+    const rows = groupQimaiRowsByKeyword(rawRows);
+    document.getElementById('ddRecordBadge').textContent = `${rows.length} 个关键词`;
+    document.getElementById('ddEmpty').classList.toggle('hidden', rows.length > 0);
+    document.getElementById('ddTableWrap').classList.toggle('hidden', rows.length === 0);
+    const latestDate = rawRows.map(item => item.date).sort((a,b)=>parseDate(b)-parseDate(a))[0] || '—';
+    const uniqueSources = new Set(rows.flatMap(item => item.sourceKeywords));
+    document.getElementById('ddSummaryLine').innerHTML = [
+      `当前类型：${ddCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动'}`,
+      `关键词：${rows.length}`, `历史记录：${rawRows.length}`, `来源词：${uniqueSources.size}`, `最新日期：${latestDate}`, '按搜索指数降序'
+    ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+    document.getElementById('ddTableHead').innerHTML = `<tr><th>关键词</th><th>来源词</th><th>最新抓取日期</th><th>${ddCategory==='new_entry'?'最新状态':'最新排名变动'}</th><th>最新指数</th><th>最新排名</th><th>历史追踪</th></tr>`;
+    document.getElementById('ddTableBody').innerHTML = rows.slice(0,1000).map(row => `<tr>
+      <td class="ios-keyword-main">${escapeHtml(row.keyword)}</td>
+      <td>${renderIosSourceChips(row.sourceKeywords)}</td>
+      <td class="ios-latest-date">${escapeHtml(row.latestDate || row.date || '—')}</td>
+      <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(ddCategory==='new_entry'?'新进榜':(row.rankChangeText||'—'))}</td>
+      <td class="ios-latest-metric">${displayNumber(row.index)}</td>
+      <td>${displayNumber(row.rank)}</td>
+      <td>${renderDiandianHistoryChips(row.history, ddCategory)}</td>
+    </tr>`).join('');
+    renderCrossValidation();
+    renderStorageSummary();
+  }
+
+  function latestSourceKeywordRows(snapshots) {
+    const rows = [...dedupeQimaiRows(snapshots,'rank_changed'), ...dedupeQimaiRows(snapshots,'new_entry')];
+    const grouped = groupQimaiRowsByKeyword(rows);
+    const map = new Map();
+    grouped.forEach(row => {
+      const key = [row.appStoreId || row.app, row.batch, row.country, row.keywordNormalized].join('|').toLowerCase();
+      const current = map.get(key);
+      if (!current || parseDate(row.latestDate || row.date) > parseDate(current.latestDate || current.date)) map.set(key,row);
+    });
+    return map;
+  }
+
+  function directionOf(row) {
+    if (!row) return 'none';
+    if (row.rankChangeStatus === 'new_entry') return 'new';
+    if (row.rankChangeStatus === 'up') return 'up';
+    if (row.rankChangeStatus === 'down' || row.rankChangeStatus === 'dropped') return 'down';
+    return 'changed';
+  }
+
+  function renderCrossValidation() {
+    const qMap = latestSourceKeywordRows(getQimaiSnapshots());
+    const dMap = latestSourceKeywordRows(getDiandianSnapshots());
+    const keys = new Set([...qMap.keys(), ...dMap.keys()]);
+    let rows = [...keys].map(key => ({ key, q:qMap.get(key)||null, d:dMap.get(key)||null }));
+    if (crossFilters.app) rows = rows.filter(item => (item.q?.app || item.d?.app) === crossFilters.app);
+    if (crossFilters.batch) rows = rows.filter(item => (item.q?.batch || item.d?.batch) === crossFilters.batch);
+    if (crossFilters.country) rows = rows.filter(item => (item.q?.country || item.d?.country) === crossFilters.country);
+    const keywordQuery = crossFilters.keyword.trim().toLowerCase();
+    if (keywordQuery) rows = rows.filter(item => (item.q?.keyword || item.d?.keyword || '').toLowerCase().includes(keywordQuery));
+
+    const allEntities = [...keys].map(key => ({ q:qMap.get(key)||null, d:dMap.get(key)||null }));
+    const apps = [...new Set(allEntities.map(item => item.q?.app || item.d?.app).filter(Boolean))].sort();
+    fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
+    const batches = [...new Set(allEntities.filter(item => !crossFilters.app || (item.q?.app||item.d?.app)===crossFilters.app).map(item=>item.q?.batch||item.d?.batch).filter(Boolean))].sort();
+    fillSelect('crossBatchSelect', batches, crossFilters.batch, '全部批次');
+    const countries = [...new Set(allEntities.filter(item => (!crossFilters.app || (item.q?.app||item.d?.app)===crossFilters.app) && (!crossFilters.batch || (item.q?.batch||item.d?.batch)===crossFilters.batch)).map(item=>item.q?.country||item.d?.country).filter(Boolean))].sort();
+    fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
+
+    const high = rows.filter(item => item.q && item.d && directionOf(item.q) === directionOf(item.d)).length;
+    const both = rows.filter(item => item.q && item.d).length;
+    document.getElementById('crossRecordBadge').textContent = `${rows.length} 个关键词`;
+    document.getElementById('crossSummaryLine').innerHTML = [`双方都有：${both}`,`方向一致：${high}`,`仅七麦：${rows.filter(i=>i.q&&!i.d).length}`,`仅点点：${rows.filter(i=>!i.q&&i.d).length}`].map(text=>`<span class="summary-chip">${text}</span>`).join('');
+    document.getElementById('crossEmpty').classList.toggle('hidden', rows.length > 0);
+    document.getElementById('crossTableWrap').classList.toggle('hidden', rows.length === 0);
+    rows.sort((a,b) => (a.q&&a.d?-1:1) - (b.q&&b.d?-1:1) || (b.q?.index||b.d?.index||0)-(a.q?.index||a.d?.index||0));
+    document.getElementById('crossTableBody').innerHTML = rows.slice(0,1500).map(item => {
+      const qDir = directionOf(item.q), dDir = directionOf(item.d);
+      let conclusion = '待观察';
+      if (item.q && item.d && qDir === dDir) conclusion = '高可信：双方方向一致';
+      else if (item.q && item.d) conclusion = '中可信：双方均发现但方向不同';
+      return `<tr><td class="ios-keyword-main">${escapeHtml(item.q?.keyword || item.d?.keyword || '—')}</td><td>${item.q?'已发现':'—'}</td><td>${item.d?'已发现':'—'}</td><td>${item.q?`${displayNumber(item.q.rank)} / ${escapeHtml(item.q.rankChangeText||'—')}`:'—'}</td><td>${item.d?`${displayNumber(item.d.rank)} / ${escapeHtml(item.d.rankChangeText||'—')}`:'—'}</td><td>${displayNumber(item.q?.index)}</td><td>${displayNumber(item.d?.index)}</td><td>${escapeHtml(conclusion)}</td></tr>`;
+    }).join('');
+  }
+
+  function initDiandianEvents() {
+    document.querySelectorAll('[data-dd-category]').forEach(button => button.addEventListener('click', () => { ddCategory=button.dataset.ddCategory; localStorage.setItem('aso_dd_category_v220',ddCategory); renderDiandianDashboard(); }));
+    [['ddAppSelect','app'],['ddBatchSelect','batch'],['ddCountrySelect','country'],['ddDateSelect','date']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { ddFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){ddFilters.batch='';ddFilters.country='';ddFilters.date='';} if(key==='batch'){ddFilters.country='';ddFilters.date='';} if(key==='country')ddFilters.date=''; renderDiandianDashboard(); }));
+    document.getElementById('ddSourceInput')?.addEventListener('input', event => { ddFilters.source=event.target.value; renderDiandianDashboard(); });
+    document.getElementById('ddKeywordInput')?.addEventListener('input', event => { ddFilters.keyword=event.target.value; renderDiandianDashboard(); });
+    [['crossAppSelect','app'],['crossBatchSelect','batch'],['crossCountrySelect','country']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { crossFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){crossFilters.batch='';crossFilters.country='';} if(key==='batch')crossFilters.country=''; renderCrossValidation(); }));
+    document.getElementById('crossKeywordInput')?.addEventListener('input', event => { crossFilters.keyword=event.target.value; renderCrossValidation(); });
+    document.getElementById('clearDiandianBtn')?.addEventListener('click', () => { if(!confirm('确定清空全部 iOS 点点快照吗？ST 和七麦数据不会受影响。'))return; localStorage.removeItem(DIANDIAN_KEY); renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); });
   }
 
   function initDataCenterEvents() {
@@ -2236,46 +2499,39 @@
 
   // 供 Chrome 扩展在看板加载完成后直接调用。返回确认结果，插件据此标记“已同步”。
   window.ASO_DASHBOARD_RECEIVE = async function(payload = {}) {
+    const source = String(payload.source || '').toLowerCase();
     try {
-      const source = String(payload.source || '').toLowerCase();
+      const isDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload.diandianState);
       if (payload.verifySnapshot) {
+        if (isDiandian) {
+          const normalized = normalizeDiandianSnapshot(payload.verifySnapshot);
+          if (!normalized) return { ok:false, code:'invalid_snapshot', message:'点点快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
+          const exists = getDiandianSnapshots().some(item => diandianSnapshotKey(item) === diandianSnapshotKey(normalized));
+          return { ok:exists, code:exists?'verified':'not_found', message:exists?'看板已保存该点点快照。':'看板中尚未找到该点点快照。', dashboardVersion:DASHBOARD_VERSION, snapshotKey:diandianSnapshotKey(normalized) };
+        }
         const normalized = normalizeQimaiSnapshot(payload.verifySnapshot);
-        if (!normalized) return { ok:false, code:'invalid_snapshot', message:'快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
+        if (!normalized) return { ok:false, code:'invalid_snapshot', message:'七麦快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
         const exists = getQimaiSnapshots().some(item => qimaiSnapshotKey(item) === qimaiSnapshotKey(normalized));
-        return {
-          ok:exists,
-          code:exists ? 'verified' : 'not_found',
-          message:exists ? '看板已保存该快照。' : '看板中尚未找到该快照。',
-          dashboardVersion:DASHBOARD_VERSION,
-          snapshotKey:qimaiSnapshotKey(normalized)
-        };
+        return { ok:exists, code:exists?'verified':'not_found', message:exists?'看板已保存该七麦快照。':'看板中尚未找到该七麦快照。', dashboardVersion:DASHBOARD_VERSION, snapshotKey:qimaiSnapshotKey(normalized) };
       }
 
-      const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' ||
-        Boolean(payload.snapshot || payload.snapshots || payload.qimaiState || payload.changedResults || payload.newEntryResults);
-      if (!looksLikeQimai) {
-        return { ok:false, code:'unsupported_source', message:'当前接收器仅处理七麦 iOS 快照。', dashboardVersion:DASHBOARD_VERSION };
+      if (isDiandian) {
+        const count = mergeDiandianPayload(payload, 'plugin_direct');
+        renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); renderOverview();
+        const snapshots = extractDiandianSnapshots(payload).map(normalizeDiandianSnapshot).filter(Boolean);
+        return { ok:true, code:'saved', message:`已保存 ${count} 个点点快照。`, count, dashboardVersion:DASHBOARD_VERSION, snapshotKeys:snapshots.map(diandianSnapshotKey), receivedAt:new Date().toISOString() };
       }
 
+      const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' || Boolean(payload.qimaiState || payload.snapshot || payload.snapshots || payload.changedResults || payload.newEntryResults);
+      if (!looksLikeQimai) return { ok:false, code:'unsupported_source', message:'当前接收器仅处理七麦或点点 iOS 快照。', dashboardVersion:DASHBOARD_VERSION };
       const count = mergeQimaiPayload(payload, 'plugin_direct');
-      renderIosDashboard();
-      renderOverview();
-      renderStorageSummary();
+      renderIosDashboard(); renderCrossValidation(); renderStorageSummary(); renderOverview();
       const snapshots = extractQimaiSnapshots(payload).map(normalizeQimaiSnapshot).filter(Boolean);
-      return {
-        ok:true,
-        code:'saved',
-        message:`已保存 ${count} 个七麦快照。`,
-        count,
-        dashboardVersion:DASHBOARD_VERSION,
-        snapshotKeys:snapshots.map(qimaiSnapshotKey),
-        receivedAt:new Date().toISOString()
-      };
+      return { ok:true, code:'saved', message:`已保存 ${count} 个七麦快照。`, count, dashboardVersion:DASHBOARD_VERSION, snapshotKeys:snapshots.map(qimaiSnapshotKey), receivedAt:new Date().toISOString() };
     } catch (error) {
       console.error('插件自动同步处理失败：', error);
-      addSyncLog({ source:'qimai_ios', status:'failed', message:error.message || String(error) });
-      renderOverview();
-      renderStorageSummary();
+      addSyncLog({ source:source || 'unknown', status:'failed', message:error.message || String(error) });
+      renderStorageSummary(); renderOverview();
       return { ok:false, code:'save_failed', message:error.message || String(error), dashboardVersion:DASHBOARD_VERSION };
     }
   };
@@ -2285,6 +2541,7 @@
       ok:true,
       dashboardVersion:DASHBOARD_VERSION,
       qimaiSnapshots:getQimaiSnapshots().length,
+      diandianSnapshots:getDiandianSnapshots().length,
       lastSync:getSyncLogs()[0]?.at || ''
     };
   };
@@ -2294,7 +2551,10 @@
     receiveUrlData();
     renderDashboard();
     initDataCenterEvents();
+    initDiandianEvents();
     renderIosDashboard();
+    renderDiandianDashboard();
+    renderCrossValidation();
     renderOverview();
     renderStorageSummary();
     showPage(activePage);
