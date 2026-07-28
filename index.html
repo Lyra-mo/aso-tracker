@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.1.6</title>
+  <title>ASO 数据中心 v2.1.7</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -38,6 +38,10 @@
     .checkpoint.late { color:#c05621; }
     .checkpoint.backfill { color:#2f855a; }
     .checkpoint.waiting-data { color:#a16207; font-weight:600; }
+    .weekly-node-label { display:inline-block; min-width:34px; margin-right:4px; color:#2b6cb0; font-size:10px; font-weight:800; }
+    .weekly-node-missing { background:#fffaf0; border:1px dashed #f6ad55; color:#9c4221; }
+    .st-node-control { display:flex; align-items:end; gap:8px; margin-left:auto; }
+    .st-node-control label { display:block; font-size:12px; color:#718096; margin-bottom:5px; }
     .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
     .note-day-btn { border: 0; background: transparent; cursor: pointer; margin-left: 3px; padding: 0 2px; font-size: 12px; }
     .note-day-btn:hover { transform: scale(1.08); }
@@ -172,7 +176,7 @@
         <div class="brand-icon">📊</div>
         <div>
           <div class="brand-title">ASO 数据中心</div>
-          <div class="brand-subtitle">Sensor Tower 排名追踪 · 七麦 iOS 关键词发现</div>
+          <div class="brand-subtitle">Sensor Tower 日级趋势 · 七麦 iOS 关键词发现</div>
         </div>
       </div>
       <nav class="main-nav" aria-label="主导航">
@@ -181,7 +185,7 @@
         <button class="nav-btn" data-page="iosSection">iOS 七麦</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.1.6</span>
+      <span class="version-badge">v2.1.7</span>
     </header>
 
     <main class="page-wrap">
@@ -211,7 +215,7 @@
       </section>
 
       <section id="stSection" class="page-section">
-        <div class="page-heading"><div><h2>Sensor Tower</h2><p>保留原有 Google Play 关键词排名、批次、备注、趋势图和 Excel 导出。</p></div></div>
+        <div class="page-heading"><div><h2>Sensor Tower</h2><p>折线图展示全部日数据；表格按周节点汇总，适合持续追踪。</p></div></div>
         <div class="control-panel">
           <div class="toolbar">
             <button id="exportBtn" class="export-btn">导出 ST JSON 备份</button>
@@ -220,6 +224,16 @@
             <button id="importBtn" class="import-btn">导入 ST JSON 备份</button>
             <input id="importFile" type="file" accept="application/json,.json" hidden>
             <button id="clearBtn" class="clear-btn">⚠️ 清空 ST 数据</button>
+            <div class="st-node-control">
+              <div class="filter-field">
+                <label for="stNodeIntervalSelect">表格节点间隔</label>
+                <select id="stNodeIntervalSelect" class="filter-select">
+                  <option value="7">每 7 天</option>
+                  <option value="14">每 14 天</option>
+                  <option value="0">显示全部日期</option>
+                </select>
+              </div>
+            </div>
           </div>
           <div class="selector-title">App 筛选</div>
           <div class="filter-row">
@@ -228,13 +242,13 @@
           </div>
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
-          <div class="hint">ST 继续使用原存储键 aso_master_data，升级不会覆盖历史数据。新版会同时保留计划日期、数据日期、实际抓取时间和补抓状态。</div>
+          <div class="hint">折线图使用全部日数据并连接缺失点；下方表格默认仅显示起点和每 7 天节点，可切换为每 14 天或全部日期。ST 仍使用原存储键 aso_master_data。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
         <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
         <div class="table-wrap">
           <table id="dataTable">
-            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名 (Date)</th><th>最新排名 (Date)</th><th>抓取间隔</th><th>Rank Change</th><th>历史抓取明细</th><th>备注</th><th>操作</th></tr></thead>
+            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名 (Date)</th><th>最新排名 (Date)</th><th>抓取间隔</th><th>Rank Change</th><th>周节点摘要</th><th>备注</th><th>操作</th></tr></thead>
             <tbody id="tableBody"></tbody>
           </table>
         </div>
@@ -328,7 +342,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.1.4';
+  const DASHBOARD_VERSION = '2.1.7';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -347,6 +361,8 @@
   let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
   let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
   let selectedItems = JSON.parse(localStorage.getItem('selected_items_v16') || '[]');
+  let stNodeIntervalDays = Number(localStorage.getItem('st_node_interval_days') || 7);
+  if (![0, 7, 14].includes(stNodeIntervalDays)) stNodeIntervalDays = 7;
   let selectedIosKeywords = new Set(safeJsonParse(localStorage.getItem(IOS_SELECTION_KEY) || '[]', []));
 
   function parseDate(value) {
@@ -402,8 +418,8 @@
     // 页面数据尚未更新时，保留页面真实日期，避免把旧数据伪装成目标节点数据。
     if (captureStatus === 'data_waiting') return rawDataDate;
 
-    // 手动快照不属于固定节点，继续使用实际数据日期。
-    if (runMode === 'manual_snapshot' || captureStatus === 'manual_snapshot') return rawDataDate;
+    // 手动快照和手动区间日数据不属于固定节点，继续使用页面真实数据日期。
+    if (['manual_snapshot', 'manual_range'].includes(runMode) || ['manual_snapshot', 'completed_range'].includes(captureStatus)) return rawDataDate;
 
     // 固定节点（D0/D3/D7/D14/D28）一律按计划日期归档。
     // completed_late 在此场景表示“晚一天执行”，不是排名属于晚一天。
@@ -431,7 +447,8 @@
       const dataDate = resolveStDataDate(item);
       const defaultFirstDate = earliestByApp[app] || dataDate;
       const batch = String(item.Batch || item.batchName || `T1-${compactDate(defaultFirstDate)}`).trim();
-      const explicitCheckpoint = CHECKPOINTS.includes(Number(item.Checkpoint)) ? Number(item.Checkpoint) : null;
+      const runModeValue = String(item.RunMode || item.runMode || '').trim();
+      const explicitCheckpoint = runModeValue === 'manual_range' ? null : (CHECKPOINTS.includes(Number(item.Checkpoint)) ? Number(item.Checkpoint) : null);
       const delayValue = Number(item.DelayDays ?? item.delayDays);
 
       return {
@@ -733,6 +750,7 @@
   }
 
   function stCheckpointBadge(record) {
+    if (record.RunMode === 'manual_range' || record.CaptureStatus === 'completed_range') return '<span class="checkpoint">日数据</span>';
     if (record.CaptureStatus === 'manual_snapshot') return '<span class="checkpoint">手动</span>';
     const checkpointText = record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`;
     if (record.CaptureStatus === 'completed_backfill') return `<span class="checkpoint backfill">${checkpointText}·补抓</span>`;
@@ -754,6 +772,74 @@
     if (record.CaptureStatus === 'data_waiting') parts.push('页面数据尚未更新');
     if (record.CaptureStatus === 'completed_late' && capturedDate) parts.push(`实抓 ${capturedDate}`);
     return parts.length ? `<span class="capture-meta">${parts.map(escapeHtml).join(' · ')}</span>` : '';
+  }
+
+  function enumerateDateKeys(startValue, endValue) {
+    const start = parseDate(startValue);
+    const end = parseDate(endValue);
+    if (!start || !end || start > end) return [];
+    const dates = [];
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      dates.push(toDateKey(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dates;
+  }
+
+  function chooseLatestRecord(records) {
+    return [...records].sort((a, b) => {
+      const left = a.CapturedAt ? new Date(a.CapturedAt).getTime() : 0;
+      const right = b.CapturedAt ? new Date(b.CapturedAt).getTime() : 0;
+      return right - left;
+    })[0] || null;
+  }
+
+  function buildWeeklyNodeSummary(records, intervalDays = 7) {
+    const sorted = [...records].sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+    if (!sorted.length) return [];
+    if (intervalDays === 0) {
+      return sorted.map((record, index) => ({
+        targetDate: record.Date,
+        record,
+        label: index === 0 ? '起点' : `D${diffDays(record.Date, sorted[0].Date)}`,
+        missing: false
+      }));
+    }
+    const grouped = new Map();
+    sorted.forEach(record => {
+      if (!grouped.has(record.Date)) grouped.set(record.Date, []);
+      grouped.get(record.Date).push(record);
+    });
+    const firstDate = sorted[0].Date;
+    const lastDate = sorted[sorted.length - 1].Date;
+    const totalDays = Math.max(0, diffDays(lastDate, firstDate));
+    const nodes = [];
+    for (let offset = 0; offset <= totalDays; offset += intervalDays) {
+      const targetDate = addDateDays(firstDate, offset);
+      const record = chooseLatestRecord(grouped.get(targetDate) || []);
+      nodes.push({ targetDate, record, label: offset === 0 ? '起点' : `W${Math.round(offset / 7)}`, missing: !record });
+    }
+    return nodes;
+  }
+
+  function renderStWeeklyHistory(records) {
+    const nodes = buildWeeklyNodeSummary(records, stNodeIntervalDays);
+    return nodes.map(node => {
+      if (!node.record) {
+        return `<span class="date-tag weekly-node-missing"><span class="weekly-node-label">${escapeHtml(node.label)}</span>${escapeHtml(node.targetDate)}：缺失</span>`;
+      }
+      const record = node.record;
+      const note = getNote(record.App, record.Batch, record.Date);
+      return `
+        <span class="date-tag">
+          <span class="weekly-node-label">${escapeHtml(node.label)}</span>${record.Date}: <b>#${record.Rank}</b>
+          ${stCheckpointBadge(record)}
+          ${stCaptureMeta(record)}
+          <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-date="${encode(record.Date)}" title="${note ? '编辑备注' : '添加备注'}">📝</button>
+          <span class="del-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="删除该天记录">✕</span>
+        </span>`;
+    }).join('');
   }
 
   function renderDashboard() {
@@ -806,26 +892,7 @@
 
     document.getElementById('tableBody').innerHTML = rows.map(row => {
       const key = itemKey(row);
-      const history = row.records.map(record => {
-        const note = getNote(record.App, record.Batch, record.Date);
-        return `
-        <span class="date-tag">
-          ${record.Date}: <b>#${record.Rank}</b>
-          ${stCheckpointBadge(record)}
-          ${stCaptureMeta(record)}
-          <button class="note-day-btn"
-            data-app="${encode(record.App)}"
-            data-batch="${encode(record.Batch)}"
-            data-date="${encode(record.Date)}"
-            title="${note ? '编辑备注' : '添加备注'}">📝</button>
-          <span class="del-day-btn"
-            data-app="${encode(record.App)}"
-            data-batch="${encode(record.Batch)}"
-            data-keyword="${encode(record.Keyword)}"
-            data-date="${encode(record.Date)}"
-            title="删除该天记录">✕</span>
-        </span>`;
-      }).join('');
+      const history = renderStWeeklyHistory(row.records);
 
       const uniqueDates = [...new Set(row.records.map(record => record.Date))];
       const rowNotes = getNotesForBatch(row.App, row.Batch, uniqueDates);
@@ -932,7 +999,8 @@
   }
 
   function updateChart(data) {
-    const dates = [...new Set(data.map(item => item.Date))].sort((a, b) => parseDate(a) - parseDate(b));
+    const sortedDates = [...new Set(data.map(item => item.Date))].sort((a, b) => parseDate(a) - parseDate(b));
+    const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
     const validRanks = data
       .map(item => Number(item.Rank))
       .filter(rank => Number.isFinite(rank) && rank > 0);
@@ -947,7 +1015,7 @@
         acc[key] = {
           name: `${item.App} · ${item.Batch} · ${item.Keyword}`,
           type: 'line',
-          connectNulls: false,
+          connectNulls: true,
           data: new Array(dates.length).fill(null)
         };
       }
@@ -1078,8 +1146,9 @@
     document.body.appendChild(container);
 
     const exportChart = echarts.init(container, null, { renderer: 'canvas' });
-    const dates = [...new Set(records.map(item => item.Date))]
+    const sortedDates = [...new Set(records.map(item => item.Date))]
       .sort((a, b) => parseDate(a) - parseDate(b));
+    const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
     const keywordMap = {};
 
     records.forEach(item => {
@@ -1089,7 +1158,7 @@
           type: 'line',
           symbol: 'circle',
           symbolSize: 7,
-          connectNulls: false,
+          connectNulls: true,
           data: new Array(dates.length).fill(null)
         };
       }
@@ -1229,7 +1298,7 @@
         views: [{ state: 'frozen', ySplit: 4 }]
       });
 
-      summarySheet.mergeCells('A1:K1');
+      summarySheet.mergeCells('A1:H1');
       const titleCell = summarySheet.getCell('A1');
       titleCell.value = 'ASO 关键词排名汇总';
       titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -1237,13 +1306,13 @@
       titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
       summarySheet.getRow(1).height = 30;
 
-      summarySheet.mergeCells('A2:K2');
+      summarySheet.mergeCells('A2:H2');
       const infoCell = summarySheet.getCell('A2');
-      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜节点：D0、D3、D7、D14、D28`;
+      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜表格节点间隔：${stNodeIntervalDays === 0 ? '全部日期' : `每 ${stNodeIntervalDays} 天`}`;
       infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
       infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-      const headers = ['App', '测试批次', 'Keyword', 'D0', 'D3', 'D7', 'D14', 'D28', '最新排名', 'Rank Change', '备注'];
+      const headers = ['App', '测试批次', 'Keyword', '首刷排名', '最新排名', 'Rank Change', '周节点摘要', '备注'];
       const headerRow = summarySheet.getRow(4);
       headerRow.values = headers;
       headerRow.height = 26;
@@ -1263,19 +1332,18 @@
       groups.forEach(group => {
         const first = group[0];
         const last = group[group.length - 1];
-        const checkpointRecord = checkpoint => group.find(item => item.Checkpoint === checkpoint);
         const rankChange = Number(first.Rank) - Number(last.Rank);
+        const weeklySummary = buildWeeklyNodeSummary(group, stNodeIntervalDays)
+          .map(node => node.record ? `${node.label} ${node.targetDate} #${node.record.Rank}` : `${node.label} ${node.targetDate} 缺失`)
+          .join('\n');
         const row = summarySheet.addRow([
           first.App,
           first.Batch,
           first.Keyword,
-          formatRankPoint(checkpointRecord(0)),
-          formatRankPoint(checkpointRecord(3)),
-          formatRankPoint(checkpointRecord(7)),
-          formatRankPoint(checkpointRecord(14)),
-          formatRankPoint(checkpointRecord(28)),
+          formatRankPoint(first),
           formatRankPoint(last),
           rankChange,
+          weeklySummary,
           getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
             .map(note => `${note.Date}：${note.Text}`)
             .join('\n')
@@ -1296,7 +1364,7 @@
           };
         });
 
-        const changeCell = row.getCell(10);
+        const changeCell = row.getCell(6);
         changeCell.numFmt = '+0;-0;0';
         if (rankChange > 0) {
           changeCell.font = { bold: true, color: { argb: 'FF25855A' } };
@@ -1311,16 +1379,13 @@
         { key: 'app', width: 22 },
         { key: 'batch', width: 18 },
         { key: 'keyword', width: 34 },
-        { key: 'd0', width: 21 },
-        { key: 'd3', width: 21 },
-        { key: 'd7', width: 21 },
-        { key: 'd14', width: 21 },
-        { key: 'd28', width: 21 },
+        { key: 'first', width: 22 },
         { key: 'latest', width: 22 },
         { key: 'change', width: 15 },
+        { key: 'weekly', width: 42 },
         { key: 'notes', width: 38 }
       ];
-      summarySheet.autoFilter = `A4:K${Math.max(4, summarySheet.rowCount)}`;
+      summarySheet.autoFilter = `A4:H${Math.max(4, summarySheet.rowCount)}`;
 
       const nodeSheet = workbook.addWorksheet('ST节点明细', { views: [{ state:'frozen', ySplit:1 }] });
       nodeSheet.columns = [
@@ -1342,7 +1407,7 @@
           app:record.App,
           batch:record.Batch,
           keyword:record.Keyword,
-          checkpoint:record.CaptureStatus==='manual_snapshot'?'手动':record.Checkpoint===null?`D${record.DayOffset}临时`:`D${record.Checkpoint}`,
+          checkpoint:(record.RunMode==='manual_range'||record.CaptureStatus==='completed_range')?'日数据':record.CaptureStatus==='manual_snapshot'?'手动':record.Checkpoint===null?`D${record.DayOffset}临时`:`D${record.Checkpoint}`,
           scheduledDate:record.ScheduledDate || '',
           dataDate:record.DataDate || record.Date,
           capturedAt:record.CapturedAt || '',
@@ -2269,6 +2334,16 @@
       if (file) importData(file);
       event.target.value = '';
     });
+    const stNodeIntervalSelect = document.getElementById('stNodeIntervalSelect');
+    if (stNodeIntervalSelect) {
+      stNodeIntervalSelect.value = String(stNodeIntervalDays);
+      stNodeIntervalSelect.addEventListener('change', () => {
+        stNodeIntervalDays = Number(stNodeIntervalSelect.value);
+        localStorage.setItem('st_node_interval_days', String(stNodeIntervalDays));
+        renderDashboard();
+      });
+    }
+
     document.getElementById('clearBtn').addEventListener('click', () => {
       if (!confirm('确定清空全部 ASO 看板数据吗？建议先点击“导出数据备份”。')) return;
       localStorage.removeItem(MASTER_KEY);
