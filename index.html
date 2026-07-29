@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.3</title>
+  <title>ASO 数据中心 v2.2.4</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -224,7 +224,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.3</span>
+      <span class="version-badge">v2.2.4</span>
     </header>
 
     <main class="page-wrap">
@@ -424,7 +424,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.2.3';
+  const DASHBOARD_VERSION = '2.2.4';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -789,61 +789,68 @@
       : records;
   }
 
+  function persistStFilterState() {
+    if (selectedAppGroup) localStorage.setItem('selected_app_group', selectedAppGroup);
+    else localStorage.removeItem('selected_app_group');
+    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+  }
+
   function renderSelectors(data) {
-    const allApps = [...new Set(data.map(item => item.App))].sort();
+    const allApps = [...new Set(data.map(item => String(item.App || '').trim()).filter(Boolean))].sort();
     const allGroups = [...new Set(allApps.map(getAppGroup))].sort((a, b) =>
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    // 当从总览跳转到具体 App 时，旧的分组筛选可能仍停留在另一个账号（如 01 / 100）。
-    // 具体 App 的选择优先级更高：自动同步到该 App 所属分组，避免 App、批次与表格数据错位。
-    const requestedApp = selectedApps[0] && allApps.includes(selectedApps[0]) ? selectedApps[0] : '';
-    if (requestedApp) {
-      const requestedGroup = getAppGroup(requestedApp);
-      if (selectedAppGroup !== requestedGroup) {
-        selectedAppGroup = requestedGroup;
-        localStorage.setItem('selected_app_group', selectedAppGroup);
-      }
-    } else if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) {
-      selectedAppGroup = '';
-      localStorage.removeItem('selected_app_group');
+    // 先验证现有选择，再按“明确 App > 分组 > 全部”的顺序确定范围。
+    // 这样总览跳转、手动切换分组和刷新页面都不会混用上一次的 App/批次。
+    let exactApp = selectedApps.length === 1 && allApps.includes(selectedApps[0]) ? selectedApps[0] : '';
+    if (exactApp) {
+      selectedAppGroup = getAppGroup(exactApp);
+    } else {
+      selectedApps = [];
+      if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) selectedAppGroup = '';
     }
-
-    const groupSelect = document.getElementById('appGroupSelect');
-    groupSelect.innerHTML = [
-      '<option value="">全部分组</option>',
-      ...allGroups.map(group => `<option value="${encode(group)}">${group}</option>`)
-    ].join('');
-    groupSelect.value = selectedAppGroup ? encode(selectedAppGroup) : '';
 
     const appsInGroup = selectedAppGroup
       ? allApps.filter(app => getAppGroup(app) === selectedAppGroup)
       : allApps;
 
-    selectedApps = selectedApps.filter(app => appsInGroup.includes(app)).slice(0, 1);
-    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+    if (exactApp && !appsInGroup.includes(exactApp)) {
+      exactApp = '';
+      selectedApps = [];
+    } else if (exactApp) {
+      selectedApps = [exactApp];
+    }
+
+    const groupSelect = document.getElementById('appGroupSelect');
+    groupSelect.innerHTML = [
+      '<option value="">全部分组</option>',
+      ...allGroups.map(group => `<option value="${encode(group)}">${escapeHtml(group)}</option>`)
+    ].join('');
+    groupSelect.value = selectedAppGroup ? encode(selectedAppGroup) : '';
 
     const appSelect = document.getElementById('appSelect');
     const allAppsLabel = selectedAppGroup ? `全部 ${selectedAppGroup} 分组 App` : '全部 App';
     appSelect.innerHTML = [
-      `<option value="">${allAppsLabel}</option>`,
-      ...appsInGroup.map(app => `<option value="${encode(app)}">${app}</option>`)
+      `<option value="">${escapeHtml(allAppsLabel)}</option>`,
+      ...appsInGroup.map(app => `<option value="${encode(app)}">${escapeHtml(app)}</option>`)
     ].join('');
     appSelect.value = selectedApps[0] ? encode(selectedApps[0]) : '';
     appSelect.disabled = appsInGroup.length === 0;
 
-    let appFiltered = applyGroupFilter(data);
-    if (selectedApps.length) {
-      appFiltered = appFiltered.filter(item => selectedApps.includes(item.App));
-    }
+    // 精确 App 选择优先于分组，避免 01 LG 与 01 screen mirror 共用批次时串数据。
+    let appFiltered = selectedApps.length
+      ? data.filter(item => item.App === selectedApps[0])
+      : (selectedAppGroup ? data.filter(item => getAppGroup(item.App) === selectedAppGroup) : data);
 
-    const allBatches = [...new Set(appFiltered.map(item => item.Batch))].sort();
+    const allBatches = [...new Set(appFiltered.map(item => item.Batch).filter(Boolean))].sort();
     selectedBatches = selectedBatches.filter(batch => allBatches.includes(batch));
-    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+    persistStFilterState();
 
     const batchSelector = document.getElementById('batchSelector');
     batchSelector.innerHTML = allBatches.map(batch => `
-      <button class="selector-btn batch-btn ${selectedBatches.includes(batch) ? 'active' : ''}" data-value="${encode(batch)}">${batch}</button>
+      <button class="selector-btn batch-btn ${selectedBatches.includes(batch) ? 'active' : ''}" data-value="${encode(batch)}">${escapeHtml(batch)}</button>
     `).join('') || '<span class="hint">暂无批次</span>';
 
     document.querySelectorAll('.batch-btn').forEach(button => {
@@ -945,11 +952,15 @@
   }
 
   function renderDashboard() {
+    const tableBody = document.getElementById('tableBody');
+    if (tableBody) tableBody.innerHTML = '';
     const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
     renderSelectors(data);
 
-    let filteredData = applyGroupFilter(data);
-    filteredData = selectedApps.length ? filteredData.filter(item => selectedApps.includes(item.App)) : filteredData;
+    // 精确 App 筛选优先，未选择 App 时才使用分组筛选。
+    let filteredData = selectedApps.length
+      ? data.filter(item => selectedApps.includes(item.App))
+      : applyGroupFilter(data);
     filteredData = selectedBatches.length ? filteredData.filter(item => selectedBatches.includes(item.Batch)) : filteredData;
 
     const keywordMap = {};
@@ -2321,8 +2332,9 @@
       localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
       localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
       localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
-      showPage('stSection');
+      // 先按目标范围重建选择器和表格，再切换页面，避免旧 DOM 留下其他 App 的选项/数据。
       renderDashboard();
+      showPage('stSection');
       if (chart) setTimeout(() => chart.resize(), 50);
       return;
     }
@@ -2778,38 +2790,51 @@
     };
   };
 
-  window.addEventListener('DOMContentLoaded', () => {
-    migrateExistingData();
-    receiveUrlData();
-    renderDashboard();
-    initDataCenterEvents();
-    initDiandianEvents();
-    renderIosDashboard();
-    renderDiandianDashboard();
-    renderCrossValidation();
-    renderOverview();
-    renderStorageSummary();
-    showPage(activePage);
+  function initStFilterEvents() {
+    const groupSelect = document.getElementById('appGroupSelect');
+    const appSelect = document.getElementById('appSelect');
 
-    document.getElementById('appGroupSelect').addEventListener('change', event => {
+    groupSelect?.addEventListener('change', event => {
       selectedAppGroup = event.target.value ? decode(event.target.value) : '';
       selectedApps = [];
       selectedBatches = [];
-      if (selectedAppGroup) localStorage.setItem('selected_app_group', selectedAppGroup);
-      else localStorage.removeItem('selected_app_group');
-      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
-      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      selectedItems = [];
+      persistStFilterState();
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
       renderDashboard();
     });
 
-    document.getElementById('appSelect').addEventListener('change', event => {
+    appSelect?.addEventListener('change', event => {
       const app = event.target.value ? decode(event.target.value) : '';
       selectedApps = app ? [app] : [];
+      if (app) selectedAppGroup = getAppGroup(app);
       selectedBatches = [];
-      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
-      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      selectedItems = [];
+      persistStFilterState();
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
       renderDashboard();
     });
+  }
+
+  function safeInitialRender(label, callback) {
+    try { callback(); }
+    catch (error) { console.error(`[${label}] 初始化失败：`, error); }
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    // 先绑定筛选事件，再执行各模块渲染。某个模块即使报错，也不会导致 ST 下拉框失效。
+    initStFilterEvents();
+    initDataCenterEvents();
+    initDiandianEvents();
+    safeInitialRender('数据迁移', migrateExistingData);
+    safeInitialRender('URL 数据接收', receiveUrlData);
+    safeInitialRender('Sensor Tower', renderDashboard);
+    safeInitialRender('七麦', renderIosDashboard);
+    safeInitialRender('点点', renderDiandianDashboard);
+    safeInitialRender('交叉验证', renderCrossValidation);
+    safeInitialRender('总览', renderOverview);
+    safeInitialRender('数据管理', renderStorageSummary);
+    safeInitialRender('页面切换', () => showPage(activePage));
 
     document.getElementById('exportBtn').addEventListener('click', exportData);
     document.getElementById('excelCurrentBtn').addEventListener('click', () => {
