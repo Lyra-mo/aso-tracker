@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.0 Preview</title>
+  <title>ASO 数据中心 v2.2.1</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -45,7 +45,7 @@
     .del-day-btn { color: #e53e3e; cursor: pointer; margin-left: 4px; font-weight: 700; }
     .note-day-btn { border: 0; background: transparent; cursor: pointer; margin-left: 3px; padding: 0 2px; font-size: 12px; }
     .note-day-btn:hover { transform: scale(1.08); }
-    .note-cell { min-width: 220px; text-align: left; }
+    .note-cell { min-width: 320px; text-align: left; }
     .note-card { display: flex; gap: 6px; align-items: flex-start; margin: 3px 0; padding: 6px 8px; border-radius: 6px; background: #fffaf0; border: 1px solid #fbd38d; }
     .note-date { flex: 0 0 auto; color: #9c4221; font-size: 11px; font-weight: 700; }
     .note-text { flex: 1; white-space: pre-wrap; word-break: break-word; color: #744210; font-size: 12px; }
@@ -53,6 +53,18 @@
     .note-edit-btn, .note-add-btn { background: #feebc8; color: #9c4221; }
     .note-delete-btn { background: #fed7d7; color: #c53030; }
     .note-empty { color: #a0aec0; font-size: 12px; }
+    .history-manager { margin-top: 8px; border-top: 1px dashed #cbd5e0; padding-top: 7px; }
+    .history-manager summary { cursor: pointer; color: #2b6cb0; font-size: 12px; font-weight: 700; list-style: none; }
+    .history-manager summary::-webkit-details-marker { display: none; }
+    .history-manager summary::before { content: '▶'; display: inline-block; margin-right: 5px; font-size: 10px; transition: transform .15s ease; }
+    .history-manager[open] summary::before { transform: rotate(90deg); }
+    .history-list { margin-top: 7px; display: grid; gap: 5px; }
+    .history-record { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px 7px; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; font-size: 11px; }
+    .history-date { color: #2d3748; font-weight: 700; }
+    .history-rank { color: #2b6cb0; font-weight: 800; }
+    .history-actions { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
+    .history-actions .note-day-btn, .history-actions .del-day-btn { margin: 0; }
+
     .delete-word-btn { background: #feb2b2; border: 0; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
     .batch-tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e6fffa; color: #276749; font-size: 12px; white-space: nowrap; }
     #emptyState { display: none; padding: 30px; text-align: center; color: #718096; background: #fff; border: 1px dashed #cbd5e0; }
@@ -187,7 +199,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.0 Preview</span>
+      <span class="version-badge">v2.2.1</span>
     </header>
 
     <main class="page-wrap">
@@ -217,7 +229,7 @@
       </section>
 
       <section id="stSection" class="page-section">
-        <div class="page-heading"><div><h2>Sensor Tower</h2><p>折线图展示全部日数据；表格按周节点汇总，适合持续追踪。</p></div></div>
+        <div class="page-heading"><div><h2>Sensor Tower</h2><p>折线图展示完整日排名趋势；主表聚焦首刷、最新变化与备注，历史记录可在备注列展开管理。</p></div></div>
         <div class="control-panel">
           <div class="toolbar">
             <button id="exportBtn" class="export-btn">导出 ST JSON 备份</button>
@@ -226,16 +238,6 @@
             <button id="importBtn" class="import-btn">导入 ST JSON 备份</button>
             <input id="importFile" type="file" accept="application/json,.json" hidden>
             <button id="clearBtn" class="clear-btn">⚠️ 清空 ST 数据</button>
-            <div class="st-node-control">
-              <div class="filter-field">
-                <label for="stNodeIntervalSelect">表格节点间隔</label>
-                <select id="stNodeIntervalSelect" class="filter-select">
-                  <option value="7">每 7 天</option>
-                  <option value="14">每 14 天</option>
-                  <option value="0">显示全部日期</option>
-                </select>
-              </div>
-            </div>
           </div>
           <div class="selector-title">App 筛选</div>
           <div class="filter-row">
@@ -244,13 +246,13 @@
           </div>
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
-          <div class="hint">折线图使用全部日数据并连接缺失点；下方表格默认仅显示起点和每 7 天节点，可切换为每 14 天或全部日期。ST 仍使用原存储键 aso_master_data。</div>
+          <div class="hint">折线图使用全部日数据并连接缺失点；主表不再重复展示周节点摘要。点击备注列中的“查看/管理历史”，可编辑备注或删除单日记录。ST 仍使用原存储键 aso_master_data。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
         <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
         <div class="table-wrap">
           <table id="dataTable">
-            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名 (Date)</th><th>最新排名 (Date)</th><th>抓取间隔</th><th>Rank Change</th><th>周节点摘要</th><th>备注</th><th>操作</th></tr></thead>
+            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名 (Date)</th><th>最新排名 (Date)</th><th>抓取间隔</th><th>Rank Change</th><th>备注 / 历史管理</th><th>操作</th></tr></thead>
             <tbody id="tableBody"></tbody>
           </table>
         </div>
@@ -872,23 +874,23 @@
     return nodes;
   }
 
-  function renderStWeeklyHistory(records) {
-    const nodes = buildWeeklyNodeSummary(records, stNodeIntervalDays);
-    return nodes.map(node => {
-      if (!node.record) {
-        return `<span class="date-tag weekly-node-missing"><span class="weekly-node-label">${escapeHtml(node.label)}</span>${escapeHtml(node.targetDate)}：缺失</span>`;
-      }
-      const record = node.record;
+  function renderStHistoryManager(records) {
+    const sorted = [...records].sort((a, b) => parseDate(b.Date) - parseDate(a.Date) || String(b.CapturedAt || '').localeCompare(String(a.CapturedAt || '')));
+    const rows = sorted.map(record => {
       const note = getNote(record.App, record.Batch, record.Date);
       return `
-        <span class="date-tag">
-          <span class="weekly-node-label">${escapeHtml(node.label)}</span>${record.Date}: <b>#${record.Rank}</b>
+        <div class="history-record">
+          <span class="history-date">${escapeHtml(record.Date)}</span>
+          <span class="history-rank">#${escapeHtml(record.Rank)}</span>
           ${stCheckpointBadge(record)}
           ${stCaptureMeta(record)}
-          <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-date="${encode(record.Date)}" title="${note ? '编辑备注' : '添加备注'}">📝</button>
-          <span class="del-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="删除该天记录">✕</span>
-        </span>`;
+          <span class="history-actions">
+            <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-date="${encode(record.Date)}" title="${note ? '编辑该日备注' : '添加该日备注'}">📝</button>
+            <span class="del-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="删除该日记录">✕</span>
+          </span>
+        </div>`;
     }).join('');
+    return `<details class="history-manager"><summary>查看/管理历史（${sorted.length} 条）</summary><div class="history-list">${rows}</div></details>`;
   }
 
   function renderDashboard() {
@@ -941,7 +943,7 @@
 
     document.getElementById('tableBody').innerHTML = rows.map(row => {
       const key = itemKey(row);
-      const history = renderStWeeklyHistory(row.records);
+      const historyManager = renderStHistoryManager(row.records);
 
       const uniqueDates = [...new Set(row.records.map(record => record.Date))];
       const rowNotes = getNotesForBatch(row.App, row.Batch, uniqueDates);
@@ -954,6 +956,7 @@
             <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">删除</button>
           </div>`).join('')
         : `<span class="note-empty">暂无备注</span><br><button class="note-add-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.last.Date)}">＋ 给最新日期加备注</button>`;
+      const noteAndHistoryHtml = `${notesHtml}${historyManager}`;
 
       return `<tr>
         <td><input class="item-check" type="checkbox" data-key="${encode(key)}" ${selectedItems.includes(key) ? 'checked' : ''}></td>
@@ -964,8 +967,7 @@
         <td>#${row.last.Rank} (${row.last.Date})</td>
         <td>${row.records.length > 1 ? `<b>+${row.interval}天</b>` : '<span style="color:#a0aec0;">单次抓取</span>'}</td>
         <td>${row.changeHtml}</td>
-        <td style="text-align:left;">${history}</td>
-        <td class="note-cell">${notesHtml}</td>
+        <td class="note-cell">${noteAndHistoryHtml}</td>
         <td><button class="delete-word-btn"
           data-app="${encode(row.App)}"
           data-batch="${encode(row.Batch)}"
@@ -1347,7 +1349,7 @@
         views: [{ state: 'frozen', ySplit: 4 }]
       });
 
-      summarySheet.mergeCells('A1:H1');
+      summarySheet.mergeCells('A1:G1');
       const titleCell = summarySheet.getCell('A1');
       titleCell.value = 'ASO 关键词排名汇总';
       titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -1355,13 +1357,13 @@
       titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
       summarySheet.getRow(1).height = 30;
 
-      summarySheet.mergeCells('A2:H2');
+      summarySheet.mergeCells('A2:G2');
       const infoCell = summarySheet.getCell('A2');
-      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜表格节点间隔：${stNodeIntervalDays === 0 ? '全部日期' : `每 ${stNodeIntervalDays} 天`}`;
+      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜排名明细请查看“ST节点明细”工作表`;
       infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
       infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-      const headers = ['App', '测试批次', 'Keyword', '首刷排名', '最新排名', 'Rank Change', '周节点摘要', '备注'];
+      const headers = ['App', '测试批次', 'Keyword', '首刷排名', '最新排名', 'Rank Change', '备注'];
       const headerRow = summarySheet.getRow(4);
       headerRow.values = headers;
       headerRow.height = 26;
@@ -1382,9 +1384,6 @@
         const first = group[0];
         const last = group[group.length - 1];
         const rankChange = Number(first.Rank) - Number(last.Rank);
-        const weeklySummary = buildWeeklyNodeSummary(group, stNodeIntervalDays)
-          .map(node => node.record ? `${node.label} ${node.targetDate} #${node.record.Rank}` : `${node.label} ${node.targetDate} 缺失`)
-          .join('\n');
         const row = summarySheet.addRow([
           first.App,
           first.Batch,
@@ -1392,7 +1391,6 @@
           formatRankPoint(first),
           formatRankPoint(last),
           rankChange,
-          weeklySummary,
           getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
             .map(note => `${note.Date}：${note.Text}`)
             .join('\n')
@@ -1431,10 +1429,9 @@
         { key: 'first', width: 22 },
         { key: 'latest', width: 22 },
         { key: 'change', width: 15 },
-        { key: 'weekly', width: 42 },
-        { key: 'notes', width: 38 }
+        { key: 'notes', width: 42 }
       ];
-      summarySheet.autoFilter = `A4:H${Math.max(4, summarySheet.rowCount)}`;
+      summarySheet.autoFilter = `A4:G${Math.max(4, summarySheet.rowCount)}`;
 
       const nodeSheet = workbook.addWorksheet('ST节点明细', { views: [{ state:'frozen', ySplit:1 }] });
       nodeSheet.columns = [
