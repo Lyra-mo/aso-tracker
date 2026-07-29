@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.5</title>
+  <title>ASO 数据中心 v2.2.6</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -229,7 +229,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.5</span>
+      <span class="version-badge">v2.2.6</span>
     </header>
 
     <main class="page-wrap">
@@ -426,7 +426,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.2.5';
+  const DASHBOARD_VERSION = '2.2.6';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -2699,18 +2699,49 @@
   }
 
   function normalizeCrossAppIdentity(row) {
-    const app = String(row?.app || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+    const app = String(row?.app || '').normalize('NFKC')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\s+/g, ' ').trim().toLowerCase();
     return app || String(row?.appStoreId || '').trim().toLowerCase();
   }
 
-  function latestSourceKeywordRows(snapshots) {
-    const rows = [...dedupeQimaiRows(snapshots,'rank_changed'), ...dedupeQimaiRows(snapshots,'new_entry')];
-    const grouped = groupQimaiRowsByKeyword(rows);
+  function normalizeCrossKeyword(value) {
+    return String(value || '').normalize('NFKC')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim().toLowerCase();
+  }
+
+  function getCrossSourceRows(snapshots) {
+    return [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
+      .map(row => ({ ...row, keywordNormalized: normalizeCrossKeyword(row.keywordNormalized || row.keyword) }))
+      .filter(row => row.keywordNormalized);
+  }
+
+  function crossRowMatchesFilters(row) {
+    if (crossFilters.app && row.app !== crossFilters.app) return false;
+    if (crossFilters.batch && row.batch !== crossFilters.batch) return false;
+    if (crossFilters.country && row.country !== crossFilters.country) return false;
+    return true;
+  }
+
+  function crossRowTime(row) {
+    return parseDate(row.latestDate || row.date)?.getTime() || parseDate(row.capturedAt)?.getTime() || 0;
+  }
+
+  function latestSourceKeywordRows(rows) {
     const map = new Map();
-    grouped.forEach(row => {
-      const key = [normalizeCrossAppIdentity(row), row.batch, row.country, row.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|');
+    (rows || []).forEach(row => {
+      // 交叉验证页的显示键只使用 App + 标准化关键词。
+      // 批次、国家先由页面筛选器过滤，避免“全部批次/全部国家”时同词重复成多行。
+      const key = [normalizeCrossAppIdentity(row), normalizeCrossKeyword(row.keywordNormalized || row.keyword)].join('|');
       const current = map.get(key);
-      if (!current || parseDate(row.latestDate || row.date) > parseDate(current.latestDate || current.date)) map.set(key,row);
+      if (!current || crossRowTime(row) > crossRowTime(current) || (
+        crossRowTime(row) === crossRowTime(current) && String(row.capturedAt || '') > String(current.capturedAt || '')
+      )) {
+        map.set(key, row);
+      }
     });
     return map;
   }
@@ -2724,35 +2755,63 @@
   }
 
   function renderCrossValidation() {
-    const qMap = latestSourceKeywordRows(getQimaiSnapshots());
-    const dMap = latestSourceKeywordRows(getDiandianSnapshots());
+    const qAllRows = getCrossSourceRows(getQimaiSnapshots());
+    const dAllRows = getCrossSourceRows(getDiandianSnapshots());
+    const allRows = [...qAllRows, ...dAllRows];
+
+    const apps = [...new Set(allRows.map(item => item.app).filter(Boolean))].sort();
+    if (crossFilters.app && !apps.includes(crossFilters.app)) crossFilters.app = '';
+    fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
+
+    const appScoped = crossFilters.app ? allRows.filter(item => item.app === crossFilters.app) : allRows;
+    const batches = [...new Set(appScoped.map(item => item.batch).filter(Boolean))].sort();
+    if (crossFilters.batch && !batches.includes(crossFilters.batch)) crossFilters.batch = '';
+    fillSelect('crossBatchSelect', batches, crossFilters.batch, '全部批次');
+
+    const batchScoped = crossFilters.batch ? appScoped.filter(item => item.batch === crossFilters.batch) : appScoped;
+    const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
+    if (crossFilters.country && !countries.includes(crossFilters.country)) crossFilters.country = '';
+    fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
+
+    const qMap = latestSourceKeywordRows(qAllRows.filter(crossRowMatchesFilters));
+    const dMap = latestSourceKeywordRows(dAllRows.filter(crossRowMatchesFilters));
     const keys = new Set([...qMap.keys(), ...dMap.keys()]);
     let rows = [...keys].map(key => ({ key, q:qMap.get(key)||null, d:dMap.get(key)||null }));
-    if (crossFilters.app) rows = rows.filter(item => (item.q?.app || item.d?.app) === crossFilters.app);
-    if (crossFilters.batch) rows = rows.filter(item => (item.q?.batch || item.d?.batch) === crossFilters.batch);
-    if (crossFilters.country) rows = rows.filter(item => (item.q?.country || item.d?.country) === crossFilters.country);
-    const keywordQuery = crossFilters.keyword.trim().toLowerCase();
-    if (keywordQuery) rows = rows.filter(item => (item.q?.keyword || item.d?.keyword || '').toLowerCase().includes(keywordQuery));
 
-    const allEntities = [...keys].map(key => ({ q:qMap.get(key)||null, d:dMap.get(key)||null }));
-    const apps = [...new Set(allEntities.map(item => item.q?.app || item.d?.app).filter(Boolean))].sort();
-    fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
-    const batches = [...new Set(allEntities.filter(item => !crossFilters.app || (item.q?.app||item.d?.app)===crossFilters.app).map(item=>item.q?.batch||item.d?.batch).filter(Boolean))].sort();
-    fillSelect('crossBatchSelect', batches, crossFilters.batch, '全部批次');
-    const countries = [...new Set(allEntities.filter(item => (!crossFilters.app || (item.q?.app||item.d?.app)===crossFilters.app) && (!crossFilters.batch || (item.q?.batch||item.d?.batch)===crossFilters.batch)).map(item=>item.q?.country||item.d?.country).filter(Boolean))].sort();
-    fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
+    const keywordQuery = normalizeCrossKeyword(crossFilters.keyword);
+    if (keywordQuery) rows = rows.filter(item => normalizeCrossKeyword(item.q?.keyword || item.d?.keyword).includes(keywordQuery));
 
     const high = rows.filter(item => item.q && item.d && directionOf(item.q) === directionOf(item.d)).length;
     const both = rows.filter(item => item.q && item.d).length;
     document.getElementById('crossRecordBadge').textContent = `${rows.length} 个关键词`;
-    document.getElementById('crossSummaryLine').innerHTML = [`双方都有：${both}`,`方向一致：${high}`,`仅七麦：${rows.filter(i=>i.q&&!i.d).length}`,`仅点点：${rows.filter(i=>!i.q&&i.d).length}`].map(text=>`<span class="summary-chip">${text}</span>`).join('');
+    document.getElementById('crossSummaryLine').innerHTML = [
+      `双方都有：${both}`,
+      `方向一致：${high}`,
+      `仅七麦：${rows.filter(i=>i.q&&!i.d).length}`,
+      `仅点点：${rows.filter(i=>!i.q&&i.d).length}`,
+      '同一关键词已合并'
+    ].map(text=>`<span class="summary-chip">${text}</span>`).join('');
     document.getElementById('crossEmpty').classList.toggle('hidden', rows.length > 0);
     document.getElementById('crossTableWrap').classList.toggle('hidden', rows.length === 0);
-    rows.sort((a,b) => (a.q&&a.d?-1:1) - (b.q&&b.d?-1:1) || (b.q?.index||b.d?.index||0)-(a.q?.index||a.d?.index||0));
+
+    rows.sort((a,b) => {
+      const bothA = a.q && a.d ? 1 : 0;
+      const bothB = b.q && b.d ? 1 : 0;
+      if (bothA !== bothB) return bothB - bothA;
+      const indexA = Math.max(Number(a.q?.index) || 0, Number(a.d?.index) || 0);
+      const indexB = Math.max(Number(b.q?.index) || 0, Number(b.d?.index) || 0);
+      return indexB - indexA || String(a.q?.keyword || a.d?.keyword || '').localeCompare(String(b.q?.keyword || b.d?.keyword || ''));
+    });
+
     document.getElementById('crossTableBody').innerHTML = rows.slice(0,1500).map(item => {
       const qDir = directionOf(item.q), dDir = directionOf(item.d);
+      const contextMismatch = item.q && item.d && (
+        String(item.q.batch || '') !== String(item.d.batch || '') ||
+        String(item.q.country || '') !== String(item.d.country || '')
+      );
       let conclusion = '待观察';
-      if (item.q && item.d && qDir === dDir) conclusion = '高可信：双方方向一致';
+      if (item.q && item.d && contextMismatch) conclusion = '双方均发现；请选择相同批次/国家进一步验证';
+      else if (item.q && item.d && qDir === dDir) conclusion = '高可信：双方方向一致';
       else if (item.q && item.d) conclusion = '中可信：双方均发现但方向不同';
       return `<tr><td class="ios-keyword-main">${escapeHtml(item.q?.keyword || item.d?.keyword || '—')}</td><td>${item.q?'已发现':'—'}</td><td>${item.d?'已发现':'—'}</td><td>${item.q?`${displayNumber(item.q.rank)} / ${escapeHtml(item.q.rankChangeText||'—')}`:'—'}</td><td>${item.d?`${displayNumber(item.d.rank)} / ${escapeHtml(item.d.rankChangeText||'—')}`:'—'}</td><td>${displayNumber(item.q?.index)}</td><td>${displayNumber(item.d?.index)}</td><td>${escapeHtml(conclusion)}</td></tr>`;
     }).join('');
