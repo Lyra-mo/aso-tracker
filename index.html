@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.2</title>
+  <title>ASO 数据中心 v2.2.3</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -224,7 +224,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.2</span>
+      <span class="version-badge">v2.2.3</span>
     </header>
 
     <main class="page-wrap">
@@ -281,7 +281,7 @@
           </div>
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
-          <div class="hint">折线图使用全部日数据并连接缺失点；主表不再重复展示周节点摘要。点击备注列中的“查看/管理历史”，可编辑备注或删除单日记录。ST 仍使用原存储键 aso_master_data。</div>
+          <div class="hint">折线图使用全部日数据并连接缺失点；主表不再重复展示周节点摘要。点击备注列中的“查看/管理历史”，可编辑备注或删除单日记录。ST 仍使用原存储键 aso_master_data。总览跳转会自动同步分组、App 与批次。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
         <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
@@ -424,7 +424,7 @@
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.2.2';
+  const DASHBOARD_VERSION = '2.2.3';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -795,7 +795,16 @@
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) {
+    // 当从总览跳转到具体 App 时，旧的分组筛选可能仍停留在另一个账号（如 01 / 100）。
+    // 具体 App 的选择优先级更高：自动同步到该 App 所属分组，避免 App、批次与表格数据错位。
+    const requestedApp = selectedApps[0] && allApps.includes(selectedApps[0]) ? selectedApps[0] : '';
+    if (requestedApp) {
+      const requestedGroup = getAppGroup(requestedApp);
+      if (selectedAppGroup !== requestedGroup) {
+        selectedAppGroup = requestedGroup;
+        localStorage.setItem('selected_app_group', selectedAppGroup);
+      }
+    } else if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) {
       selectedAppGroup = '';
       localStorage.removeItem('selected_app_group');
     }
@@ -2302,9 +2311,20 @@
 
   function overviewOpenTarget(group) {
     if (group.source === 'st') {
-      selectedApps = [group.app]; selectedBatches=[group.batch];
-      localStorage.setItem('selected_apps',JSON.stringify(selectedApps)); localStorage.setItem('selected_batches',JSON.stringify(selectedBatches));
-      renderDashboard(); showPage('stSection'); return;
+      // 总览跳转必须同时同步“分组 → App → 批次”，否则旧分组会把目标 App 清空，
+      // 造成 01 LG / 100 Samsung 等账号在详情页无数据或串到其他 App。
+      selectedAppGroup = getAppGroup(group.app);
+      selectedApps = [group.app];
+      selectedBatches = group.batch ? [group.batch] : [];
+      selectedItems = [];
+      localStorage.setItem('selected_app_group', selectedAppGroup);
+      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+      showPage('stSection');
+      renderDashboard();
+      if (chart) setTimeout(() => chart.resize(), 50);
+      return;
     }
     if (group.source === 'qimai') {
       iosFilters.app=group.app; iosFilters.batch=group.batch; iosFilters.country=group.country||''; iosFilters.date=overviewFilters.date||'';
