@@ -205,6 +205,14 @@
     .overview-status-table th { background:#f8fafc; color:#4a5568; font-weight:700; }
     .overview-status-table tr:last-child td { border-bottom:0; }
     .overview-empty { color:#a0aec0; text-align:center; padding:26px 12px; }
+    .cross-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:14px; }
+    .cross-actions .hint { margin:0; }
+    .cross-keyword-btn { border:0; background:transparent; color:#2b6cb0; font:inherit; font-weight:700; padding:0; cursor:pointer; text-align:left; }
+    .cross-keyword-btn:hover { text-decoration:underline; }
+    .cross-trend-panel { margin:16px 0; }
+    .cross-trend-title-wrap { min-width:0; }
+    .cross-trend-title-wrap h3 { margin:0 0 4px; }
+    .cross-trend-context { color:#718096; font-size:13px; }
     .hidden { display:none !important; }
     @media (max-width:1200px) { .cards { grid-template-columns:repeat(3,1fr); } .two-col { grid-template-columns:1fr; } }
     @media (max-width:760px) { .topbar { align-items:flex-start; flex-direction:column; } .cards { grid-template-columns:repeat(2,1fr); } .page-wrap { padding:12px; } .detail-grid { grid-template-columns:repeat(2,1fr); } .overview-app-row { grid-template-columns:1fr; } .overview-status-table { min-width:760px; } }
@@ -229,7 +237,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.7</span>
+      <span class="version-badge">v2.2.8</span>
     </header>
 
     <main class="page-wrap">
@@ -365,7 +373,22 @@
             <div class="filter-field"><label for="crossCountrySelect">国家</label><select id="crossCountrySelect" class="filter-select"></select></div>
             <div class="filter-field"><label for="crossKeywordInput">关键词</label><input id="crossKeywordInput" class="text-input" placeholder="搜索关键词"></div>
           </div>
+          <div class="cross-actions">
+            <button id="exportCrossBothBtn" class="action-btn success">导出双方都有 Excel</button>
+            <button id="exportCrossAllBtn" class="action-btn">导出当前全部 Excel</button>
+            <span class="hint">导出会沿用当前 App、批次、国家和关键词筛选。</span>
+          </div>
           <div class="summary-line" id="crossSummaryLine"></div>
+        </div>
+        <div id="crossTrendPanel" class="panel cross-trend-panel hidden">
+          <div class="panel-title">
+            <div class="cross-trend-title-wrap">
+              <h3 id="crossTrendTitle">关键词排名趋势</h3>
+              <div id="crossTrendContext" class="cross-trend-context">点击表格中的关键词查看七麦与点点排名曲线。</div>
+            </div>
+            <button id="crossTrendCloseBtn" class="action-btn">关闭曲线</button>
+          </div>
+          <div id="crossTrendChart" style="width:100%;height:360px;"></div>
         </div>
         <div id="crossEmpty" class="empty-box">暂无可交叉验证的数据。需要七麦与点点至少一方有快照。</div>
         <div id="crossTableWrap" class="table-wrap hidden">
@@ -429,11 +452,14 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.7';
+  const DASHBOARD_VERSION = '2.2.8';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
   let iosOverviewTrendChart = null;
+  let crossTrendChart = null;
+  let crossSelectedKey = '';
+  let crossCurrentRows = [];
   let activePage = localStorage.getItem('aso_active_page_v200') || 'overviewSection';
   let iosCategory = localStorage.getItem('aso_ios_category_v200') || 'rank_changed';
   let ddCategory = localStorage.getItem('aso_dd_category_v220') || 'rank_changed';
@@ -2876,6 +2902,149 @@
     return 'changed';
   }
 
+  function getCrossConclusion(item) {
+    const qDir = directionOf(item.q), dDir = directionOf(item.d);
+    const contextMismatch = item.q && item.d && (
+      String(item.q.batch || '') !== String(item.d.batch || '') ||
+      String(item.q.country || '') !== String(item.d.country || '')
+    );
+    if (item.q && item.d && contextMismatch) return '双方均发现；请选择相同批次/国家进一步验证';
+    if (item.q && item.d && qDir === dDir) return '高可信：双方方向一致';
+    if (item.q && item.d) return '中可信：双方均发现但方向不同';
+    return '待观察';
+  }
+
+  function crossRowDate(row) {
+    return toDateKey(row?.latestDate || row?.date || row?.currentDate || '');
+  }
+
+  function buildCrossTrendSeries(rows, sourceLabel, selectedKey) {
+    const groups = new Map();
+    (rows || []).filter(crossRowMatchesFilters).forEach(row => {
+      if (crossEntityKey(row) !== selectedKey || !Number.isFinite(row.rank)) return;
+      const contextKey = [String(row.batch || ''), String(row.country || '')].join('|');
+      if (!groups.has(contextKey)) groups.set(contextKey, { batch:row.batch || '', country:row.country || '', dates:new Map() });
+      const group = groups.get(contextKey);
+      const date = crossRowDate(row);
+      if (!date) return;
+      const current = group.dates.get(date);
+      if (!current || String(row.capturedAt || '') >= String(current.capturedAt || '')) group.dates.set(date, row);
+    });
+    return [...groups.values()].map(group => {
+      const suffix = [group.batch, group.country].filter(Boolean).join(' · ');
+      return {
+        name: suffix ? `${sourceLabel} · ${suffix}` : sourceLabel,
+        values: group.dates
+      };
+    });
+  }
+
+  function renderCrossTrend(qAllRows, dAllRows, visibleRows) {
+    const panel = document.getElementById('crossTrendPanel');
+    const selected = (visibleRows || []).find(item => item.key === crossSelectedKey);
+    if (!selected || !window.echarts) {
+      panel?.classList.add('hidden');
+      if (crossTrendChart) crossTrendChart.clear();
+      if (crossSelectedKey && !selected) crossSelectedKey = '';
+      return;
+    }
+    const qSeries = buildCrossTrendSeries(qAllRows, '七麦', crossSelectedKey);
+    const dSeries = buildCrossTrendSeries(dAllRows, '点点', crossSelectedKey);
+    const seriesDefs = [...qSeries, ...dSeries];
+    const dateSet = new Set();
+    seriesDefs.forEach(series => series.values.forEach((_, date) => dateSet.add(date)));
+    const dates = [...dateSet].sort();
+    panel.classList.remove('hidden');
+    const keyword = selected.q?.keyword || selected.d?.keyword || '关键词';
+    document.getElementById('crossTrendTitle').textContent = `${keyword}｜排名趋势`;
+    const context = [crossFilters.app || '全部 App', crossFilters.batch || '全部批次', crossFilters.country || '全部国家'].join(' · ');
+    document.getElementById('crossTrendContext').textContent = `${context}；排名数字越小越好。点击其他关键词可切换曲线，当前筛选不会改变。`;
+    if (!crossTrendChart) crossTrendChart = echarts.init(document.getElementById('crossTrendChart'));
+    crossTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ type:'scroll', top:0 },
+      grid:{ left:58, right:28, top:52, bottom:48 },
+      xAxis:{ type:'category', data:dates, boundaryGap:false },
+      yAxis:{ type:'value', inverse:true, min:1, name:'排名' },
+      series:seriesDefs.map(def => ({
+        name:def.name,
+        type:'line',
+        smooth:false,
+        connectNulls:true,
+        symbol:'circle',
+        symbolSize:7,
+        data:dates.map(date => def.values.get(date)?.rank ?? null)
+      }))
+    }, true);
+    setTimeout(() => crossTrendChart.resize(), 30);
+  }
+
+  function crossExportValue(row, key) {
+    const value = row?.[key];
+    return value === null || value === undefined ? '' : value;
+  }
+
+  async function exportCrossValidationExcel(onlyBoth = false) {
+    if (!window.ExcelJS) return alert('ExcelJS 尚未加载，请检查网络后重试。');
+    const rows = (crossCurrentRows || []).filter(item => !onlyBoth || (item.q && item.d));
+    if (!rows.length) return alert(onlyBoth ? '当前筛选下没有双方都有的关键词。' : '当前筛选下没有可导出的数据。');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ASO 数据中心';
+    const sheet = workbook.addWorksheet(onlyBoth ? '双方都有' : '当前全部', { views:[{state:'frozen',ySplit:1}] });
+    sheet.columns = [
+      {header:'关键词',key:'keyword',width:30},
+      {header:'App',key:'app',width:24},
+      {header:'国家',key:'country',width:10},
+      {header:'七麦批次',key:'qBatch',width:18},
+      {header:'点点批次',key:'dBatch',width:18},
+      {header:'七麦最新日期',key:'qDate',width:14},
+      {header:'点点最新日期',key:'dDate',width:14},
+      {header:'七麦排名',key:'qRank',width:11},
+      {header:'七麦排名变动',key:'qChange',width:15},
+      {header:'七麦指数',key:'qIndex',width:12},
+      {header:'点点排名',key:'dRank',width:11},
+      {header:'点点排名变动',key:'dChange',width:15},
+      {header:'点点指数',key:'dIndex',width:12},
+      {header:'验证结论',key:'conclusion',width:38}
+    ];
+    rows.forEach(item => sheet.addRow({
+      keyword:item.q?.keyword || item.d?.keyword || '',
+      app:item.q?.app || item.d?.app || '',
+      country:item.q?.country || item.d?.country || '',
+      qBatch:crossExportValue(item.q,'batch'),
+      dBatch:crossExportValue(item.d,'batch'),
+      qDate:crossRowDate(item.q),
+      dDate:crossRowDate(item.d),
+      qRank:crossExportValue(item.q,'rank'),
+      qChange:crossExportValue(item.q,'rankChangeText'),
+      qIndex:crossExportValue(item.q,'index'),
+      dRank:crossExportValue(item.d,'rank'),
+      dChange:crossExportValue(item.d,'rankChangeText'),
+      dIndex:crossExportValue(item.d,'index'),
+      conclusion:getCrossConclusion(item)
+    }));
+    const header = sheet.getRow(1);
+    header.font={bold:true,color:{argb:'FFFFFFFF'}};
+    header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4299E1'}};
+    header.alignment={vertical:'middle',horizontal:'center'};
+    sheet.autoFilter={from:'A1',to:'N1'};
+    const filterSheet = workbook.addWorksheet('筛选条件');
+    filterSheet.columns=[{header:'条件',key:'label',width:18},{header:'当前值',key:'value',width:32}];
+    [
+      ['导出范围',onlyBoth?'双方都有':'当前全部'],
+      ['App',crossFilters.app||'全部 App'],
+      ['测试批次',crossFilters.batch||'全部批次'],
+      ['国家',crossFilters.country||'全部国家'],
+      ['关键词搜索',crossFilters.keyword||'无'],
+      ['指数门槛',`≥ ${IOS_MIN_INDEX}`],
+      ['导出时间',new Date().toLocaleString()]
+    ].forEach(([label,value])=>filterSheet.addRow({label,value}));
+    const fh=filterSheet.getRow(1); fh.font={bold:true,color:{argb:'FFFFFFFF'}}; fh.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF718096'}};
+    const buffer = await workbook.xlsx.writeBuffer();
+    const scope = onlyBoth ? '双方都有' : '当前全部';
+    downloadBlob(new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `iOS关键词交叉验证_${scope}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
   function renderCrossValidation() {
     const qAllRows = getCrossSourceRows(getQimaiSnapshots());
     const dAllRows = getCrossSourceRows(getDiandianSnapshots());
@@ -2925,19 +3094,14 @@
       const indexB = Math.max(Number(b.q?.index) || 0, Number(b.d?.index) || 0);
       return indexB - indexA || String(a.q?.keyword || a.d?.keyword || '').localeCompare(String(b.q?.keyword || b.d?.keyword || ''));
     });
+    crossCurrentRows = rows;
 
     document.getElementById('crossTableBody').innerHTML = rows.slice(0,1500).map(item => {
-      const qDir = directionOf(item.q), dDir = directionOf(item.d);
-      const contextMismatch = item.q && item.d && (
-        String(item.q.batch || '') !== String(item.d.batch || '') ||
-        String(item.q.country || '') !== String(item.d.country || '')
-      );
-      let conclusion = '待观察';
-      if (item.q && item.d && contextMismatch) conclusion = '双方均发现；请选择相同批次/国家进一步验证';
-      else if (item.q && item.d && qDir === dDir) conclusion = '高可信：双方方向一致';
-      else if (item.q && item.d) conclusion = '中可信：双方均发现但方向不同';
-      return `<tr><td class="ios-keyword-main">${escapeHtml(item.q?.keyword || item.d?.keyword || '—')}</td><td>${item.q?'已发现':'—'}</td><td>${item.d?'已发现':'—'}</td><td>${item.q?`${displayNumber(item.q.rank)} / ${escapeHtml(item.q.rankChangeText||'—')}`:'—'}</td><td>${item.d?`${displayNumber(item.d.rank)} / ${escapeHtml(item.d.rankChangeText||'—')}`:'—'}</td><td>${displayNumber(item.q?.index)}</td><td>${displayNumber(item.d?.index)}</td><td>${escapeHtml(conclusion)}</td></tr>`;
+      const conclusion = getCrossConclusion(item);
+      const keyword = item.q?.keyword || item.d?.keyword || '—';
+      return `<tr><td class="ios-keyword-main"><button type="button" class="cross-keyword-btn" data-cross-key="${encode(item.key)}" title="点击查看排名曲线">${escapeHtml(keyword)}</button></td><td>${item.q?'已发现':'—'}</td><td>${item.d?'已发现':'—'}</td><td>${item.q?`${displayNumber(item.q.rank)} / ${escapeHtml(item.q.rankChangeText||'—')}`:'—'}</td><td>${item.d?`${displayNumber(item.d.rank)} / ${escapeHtml(item.d.rankChangeText||'—')}`:'—'}</td><td>${displayNumber(item.q?.index)}</td><td>${displayNumber(item.d?.index)}</td><td>${escapeHtml(conclusion)}</td></tr>`;
     }).join('');
+    renderCrossTrend(qAllRows, dAllRows, rows);
   }
 
   function initDiandianEvents() {
@@ -2947,6 +3111,16 @@
     document.getElementById('ddKeywordInput')?.addEventListener('input', event => { ddFilters.keyword=event.target.value; renderDiandianDashboard(); });
     [['crossAppSelect','app'],['crossBatchSelect','batch'],['crossCountrySelect','country']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { crossFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){crossFilters.batch='';crossFilters.country='';} if(key==='batch')crossFilters.country=''; renderCrossValidation(); }));
     document.getElementById('crossKeywordInput')?.addEventListener('input', event => { crossFilters.keyword=event.target.value; renderCrossValidation(); });
+    document.getElementById('crossTableBody')?.addEventListener('click', event => {
+      const button = event.target.closest('[data-cross-key]');
+      if (!button) return;
+      crossSelectedKey = decode(button.dataset.crossKey || '');
+      renderCrossValidation();
+      document.getElementById('crossTrendPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+    document.getElementById('crossTrendCloseBtn')?.addEventListener('click', () => { crossSelectedKey=''; renderCrossValidation(); });
+    document.getElementById('exportCrossBothBtn')?.addEventListener('click', () => exportCrossValidationExcel(true));
+    document.getElementById('exportCrossAllBtn')?.addEventListener('click', () => exportCrossValidationExcel(false));
     document.getElementById('clearDiandianBtn')?.addEventListener('click', () => { if(!confirm('确定清空全部 iOS 点点快照吗？ST 和七麦数据不会受影响。'))return; localStorage.removeItem(DIANDIAN_KEY); renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); });
   }
 
@@ -3128,7 +3302,7 @@
     });
   });
 
-  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); });
+  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); if (crossTrendChart) crossTrendChart.resize(); });
 </script>
 </body>
 </html>
