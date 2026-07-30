@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.6</title>
+  <title>ASO 数据中心 v2.2.7</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -229,7 +229,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.6</span>
+      <span class="version-badge">v2.2.7</span>
     </header>
 
     <main class="page-wrap">
@@ -269,7 +269,7 @@
       </section>
 
       <section id="stSection" class="page-section">
-        <div class="page-heading"><div><h2>Sensor Tower</h2><p>折线图展示完整日排名趋势；主表聚焦首刷、最新变化与备注，历史记录可在备注列展开管理。</p></div></div>
+        <div class="page-heading"><div><h2>Sensor Tower</h2><p>折线图展示完整日排名趋势；无排名日期保持空白，不视为技术失败。主表聚焦首刷、最新变化与备注，历史记录可在备注列展开管理。</p></div></div>
         <div class="control-panel">
           <div class="toolbar">
             <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
@@ -283,6 +283,7 @@
           </div>
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
+          <div id="stProcessSummary" class="summary-line"></div>
           <div class="hint">折线图使用全部日数据并连接缺失点；备注可自行选择任意日期添加。主表显示首刷排名、最新排名与历史最高排名，完整日期仍保留在历史管理中。ST 仍使用原存储键 aso_master_data。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
@@ -296,7 +297,7 @@
       </section>
 
       <section id="iosSection" class="page-section">
-        <div class="page-heading"><div><h2>iOS 七麦</h2><p>同一个关键词合并为一行，集中展示来源词、最新指标与跨日期历史；勾选关键词可查看排名趋势。</p></div><div class="version-badge" id="iosRecordBadge">0 条</div></div>
+        <div class="page-heading"><div><h2>iOS 七麦</h2><p>同一个关键词合并为一行，只展示搜索指数 ≥ 4,605 的排名变动和新进榜记录；勾选关键词可查看排名趋势。</p></div><div class="version-badge" id="iosRecordBadge">0 条</div></div>
         <div class="control-panel">
           <div class="section-tabs">
             <button class="section-tab active" data-ios-category="rank_changed">相关词＋排名变动</button>
@@ -356,7 +357,7 @@
       </section>
 
       <section id="crossSection" class="page-section">
-        <div class="page-heading"><div><h2>iOS 关键词交叉验证</h2><p>比较七麦与点点是否同时发现同一关键词、排名方向是否一致。指数与排名不做平均。</p></div><div class="version-badge" id="crossRecordBadge">0 条</div></div>
+        <div class="page-heading"><div><h2>iOS 关键词交叉验证</h2><p>比较七麦与点点是否同时发现同一关键词、排名方向是否一致；仅验证搜索指数 ≥ 4,605 的记录，指数与排名不做平均。</p></div><div class="version-badge" id="crossRecordBadge">0 条</div></div>
         <div class="control-panel">
           <div class="ios-toolbar">
             <div class="filter-field"><label for="crossAppSelect">App</label><select id="crossAppSelect" class="filter-select"></select></div>
@@ -424,9 +425,11 @@
   const QIMAI_KEY = 'aso_ios_qimai_snapshots_v200';
   const DIANDIAN_KEY = 'aso_ios_diandian_snapshots_v220';
   const SYNC_LOG_KEY = 'aso_sync_logs_v200';
+  const ST_STATUS_KEY = 'aso_st_processing_status_v227';
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
-  const DASHBOARD_VERSION = '2.2.6';
+  const IOS_MIN_INDEX = 4605;
+  const DASHBOARD_VERSION = '2.2.7';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -759,6 +762,54 @@
     saveNotesMap(notes);
   }
 
+  function normalizeStStatusRecord(record = {}) {
+    const app = String(record.app || record.App || '').trim();
+    const batch = String(record.batch || record.Batch || '').trim();
+    const date = toDateKey(record.date || record.dataDate || record.scheduledDate || record.Date || '');
+    if (!app || !batch || !date) return null;
+    return {
+      app,
+      batch,
+      country:String(record.country || record.Country || '').trim().toUpperCase(),
+      date,
+      status:String(record.status || record.captureStatus || 'completed').trim(),
+      capturedAt:record.capturedAt || record.CapturedAt || new Date().toISOString(),
+      reason:String(record.reason || record.message || record.lastError || '').trim(),
+      keywordCount:Number.isFinite(Number(record.keywordCount)) ? Number(record.keywordCount) : null
+    };
+  }
+
+  function stStatusKey(record) {
+    return [record.app, record.batch, record.country, record.date].map(value => String(value || '').trim().toLowerCase()).join('|');
+  }
+
+  function getStProcessingStatuses() {
+    const parsed = safeJsonParse(localStorage.getItem(ST_STATUS_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeStStatusRecord).filter(Boolean) : [];
+  }
+
+  function saveStProcessingStatuses(records) {
+    const map = new Map();
+    (records || []).map(normalizeStStatusRecord).filter(Boolean).forEach(record => {
+      const key = stStatusKey(record);
+      const current = map.get(key);
+      if (!current || String(record.capturedAt || '') >= String(current.capturedAt || '')) map.set(key, record);
+    });
+    const sorted = [...map.values()].sort((a,b)=>parseDate(b.date)-parseDate(a.date) || String(b.capturedAt||'').localeCompare(String(a.capturedAt||'')));
+    localStorage.setItem(ST_STATUS_KEY, JSON.stringify(sorted));
+  }
+
+  function mergeStStatusPayload(payload = {}) {
+    const incoming = [];
+    if (Array.isArray(payload.statusRecords)) incoming.push(...payload.statusRecords);
+    if (payload.statusRecord) incoming.push(payload.statusRecord);
+    if (payload.stStatus) incoming.push(payload.stStatus);
+    const normalized = incoming.map(normalizeStStatusRecord).filter(Boolean);
+    if (!normalized.length) return 0;
+    saveStProcessingStatuses([...getStProcessingStatuses(), ...normalized]);
+    return normalized.length;
+  }
+
   function receiveUrlData() {
     const params = new URLSearchParams(window.location.search);
     const encodedData = params.get('data');
@@ -967,6 +1018,30 @@
     return `<details class="history-manager"><summary>查看/管理历史（${sorted.length} 条）</summary><div class="history-list">${rows}</div></details>`;
   }
 
+  function renderStProcessSummary(filteredData) {
+    const container = document.getElementById('stProcessSummary');
+    if (!container) return;
+    let statuses = getStProcessingStatuses();
+    if (selectedApps.length) statuses = statuses.filter(item => selectedApps.includes(item.app));
+    else if (selectedAppGroup) statuses = statuses.filter(item => getAppGroup(item.app) === selectedAppGroup);
+    if (selectedBatches.length) statuses = statuses.filter(item => selectedBatches.includes(item.batch));
+
+    const dataDates = new Set((filteredData || []).map(item => [item.App,item.Batch,overviewCountryOfSt(item),item.Date].join('|')));
+    const noData = statuses.filter(item => item.status === 'completed_no_data' && !dataDates.has([item.app,item.batch,item.country,item.date].join('|')));
+    const processedDates = new Set([
+      ...(filteredData || []).map(item => item.Date),
+      ...statuses.filter(item => ['completed','completed_no_data','existing'].includes(item.status)).map(item => item.date)
+    ]);
+    const rankedDates = new Set((filteredData || []).map(item => item.Date));
+    const chips = [
+      `已处理日期：${processedDates.size}`,
+      `有排名日期：${rankedDates.size}`,
+      `无排名日期：${new Set(noData.map(item=>item.date)).size}`
+    ];
+    if (noData.length) chips.push(`无排名：${[...new Set(noData.map(item=>item.date))].sort().join('、')}`);
+    container.innerHTML = chips.map(text=>`<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+  }
+
   function renderDashboard() {
     const tableBody = document.getElementById('tableBody');
     if (tableBody) tableBody.innerHTML = '';
@@ -978,6 +1053,7 @@
       ? data.filter(item => selectedApps.includes(item.App))
       : applyGroupFilter(data);
     filteredData = selectedBatches.length ? filteredData.filter(item => selectedBatches.includes(item.Batch)) : filteredData;
+    renderStProcessSummary(filteredData);
 
     const keywordMap = {};
     filteredData.forEach(item => {
@@ -1676,6 +1752,15 @@
     return Number.isFinite(number) ? number : null;
   }
 
+  function isEligibleIosIndex(value) {
+    const index = numberOrNull(value);
+    return Number.isFinite(index) && index >= IOS_MIN_INDEX;
+  }
+
+  function formatIosIndexThreshold() {
+    return `指数门槛：≥${IOS_MIN_INDEX.toLocaleString()}`;
+  }
+
   function normalizeSourceKeywords(row) {
     const values = Array.isArray(row?.sourceKeywords) ? row.sourceKeywords : [row?.sourceKeyword];
     return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
@@ -1788,6 +1873,9 @@
     snapshots.forEach(snapshot => {
       const rows = category === 'new_entry' ? snapshot.newEntryResults : snapshot.changedResults;
       rows.forEach(row => {
+        // 与 v2.3.3+ 插件保持一致：两类 iOS 结果都只展示指数 >= 4605 的记录。
+        // 旧低指数快照仍保留在 localStorage 中，但不会进入列表、总览、导出或交叉验证。
+        if (!isEligibleIosIndex(row.index)) return;
         const key = [row.app, row.appStoreId, row.batch, row.country, row.date, row.keywordNormalized, category].join('|');
         if (!map.has(key)) {
           map.set(key, { ...row, sourceKeywords: [...row.sourceKeywords], matchCount: 1 });
@@ -2049,7 +2137,7 @@
 
   function qimaiRawRowMatchesFilters(row, snapshot) {
     const normalized = normalizeQimaiRow(row, snapshot, iosCategory);
-    if (!normalized) return false;
+    if (!normalized || !isEligibleIosIndex(normalized.index)) return false;
     if (iosFilters.app && normalized.app !== iosFilters.app) return false;
     if (iosFilters.batch && normalized.batch !== iosFilters.batch) return false;
     if (iosFilters.country && normalized.country !== iosFilters.country) return false;
@@ -2132,6 +2220,7 @@
       `历史记录：${rawRows.length}`,
       `来源词：${uniqueSources.size}`,
       `最新日期：${latestDate}`,
+      formatIosIndexThreshold(),
       '同一关键词已合并'
     ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
 
@@ -2240,6 +2329,7 @@
     }));
     getQimaiSnapshots().forEach(snapshot => rows.push({ source:'qimai', app:snapshot.app, batch:snapshot.batch, country:snapshot.country, date:snapshot.date, capturedAt:snapshot.createdAt || '' }));
     getDiandianSnapshots().forEach(snapshot => rows.push({ source:'diandian', app:snapshot.app, batch:snapshot.batch, country:snapshot.country, date:snapshot.date, capturedAt:snapshot.createdAt || '' }));
+    getStProcessingStatuses().forEach(status => rows.push({ source:'st', app:status.app, batch:status.batch, country:status.country, date:status.date, capturedAt:status.capturedAt || '', processStatus:status.status }));
     return rows;
   }
 
@@ -2285,17 +2375,30 @@
 
   function groupOverviewSt(records) {
     const map = new Map();
+    const statuses = getStProcessingStatuses();
+    const ensureGroup = (app,batch,country) => {
+      const key = ['st',app,batch,country].join('|');
+      if (!map.has(key)) map.set(key,{ source:'st', app, batch, country, records:[], statuses:[] });
+      return map.get(key);
+    };
     records.forEach(item => {
       const country = overviewCountryOfSt(item);
       if (overviewFilters.app && item.App !== overviewFilters.app) return;
       if (overviewFilters.batch && item.Batch !== overviewFilters.batch) return;
       if (overviewFilters.country && country !== overviewFilters.country) return;
-      const key = ['st',item.App,item.Batch,country].join('|');
-      if (!map.has(key)) map.set(key, { source:'st', app:item.App, batch:item.Batch, country, records:[] });
-      map.get(key).records.push(item);
+      ensureGroup(item.App,item.Batch,country).records.push(item);
+    });
+    statuses.forEach(item => {
+      if (overviewFilters.app && item.app !== overviewFilters.app) return;
+      if (overviewFilters.batch && item.batch !== overviewFilters.batch) return;
+      if (overviewFilters.country && item.country !== overviewFilters.country) return;
+      ensureGroup(item.app,item.batch,item.country).statuses.push(item);
     });
     return [...map.values()].map(group => {
-      const allDates = [...new Set(group.records.map(item => item.Date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+      const rankDates = new Set(group.records.map(item=>item.Date).filter(Boolean));
+      const statusDates = new Set(group.statuses.filter(item=>['completed','completed_no_data','existing'].includes(item.status)).map(item=>item.date).filter(Boolean));
+      const allDates = [...new Set([...rankDates,...statusDates])].sort((a,b)=>parseDate(a)-parseDate(b));
+      const noDataDates = [...new Set(group.statuses.filter(item=>item.status==='completed_no_data' && !rankDates.has(item.date)).map(item=>item.date))];
       const latestDate = overviewFilters.date || allDates[allDates.length-1] || '';
       const keywordGroups = new Map();
       group.records.forEach(item => {
@@ -2315,11 +2418,14 @@
         if (diff > 0) up += 1; else if (diff < 0) down += 1; else flat += 1;
       });
       const scopedRecords = overviewFilters.date ? group.records.filter(item=>item.Date===overviewFilters.date) : group.records;
+      const scopedStatuses = overviewFilters.date ? group.statuses.filter(item=>item.date===overviewFilters.date) : group.statuses;
       return {
         ...group, keywordCount:keywordGroups.size, up, down, flat, other:0, newCount:0,
-        syncDays:overviewFilters.date ? (scopedRecords.length ? 1 : 0) : allDates.length,
-        latestDate, lastSync:latestIsoValue(group.records.map(item=>item.CapturedAt || '')) || latestDate,
-        recordCount:scopedRecords.length
+        noDataDays:noDataDates.length,
+        syncDays:overviewFilters.date ? ((scopedRecords.length||scopedStatuses.length)?1:0) : allDates.length,
+        latestDate,
+        lastSync:latestIsoValue([...group.records.map(item=>item.CapturedAt||''),...group.statuses.map(item=>item.capturedAt||'')]) || latestDate,
+        recordCount:scopedRecords.length + scopedStatuses.length
       };
     }).filter(group => !overviewFilters.date || group.recordCount > 0);
   }
@@ -2434,7 +2540,7 @@
     document.getElementById('overviewChangeSummary').innerHTML = sources.map(source => {
       const sourceGroups=groups.filter(item=>item.source===source);
       const totals={ keywords:sourceGroups.reduce((s,i)=>s+i.keywordCount,0),up:sourceGroups.reduce((s,i)=>s+i.up,0),down:sourceGroups.reduce((s,i)=>s+i.down,0),newCount:sourceGroups.reduce((s,i)=>s+i.newCount,0) };
-      const rows=sourceGroups.length?sourceGroups.map((item,index)=>`<div class="overview-app-row" data-overview-index="${encode(`${source}|${item.app}|${item.batch}|${item.country}`)}"><div><div class="overview-app-name">${escapeHtml(item.app)}</div><div class="overview-app-meta">${escapeHtml(item.batch || '未命名批次')}</div></div><div class="overview-app-meta">${escapeHtml(item.country || '未标注国家')}</div><div class="overview-app-meta">同步 ${item.syncDays} 天<br>最新 ${escapeHtml(item.latestDate || '—')}</div><div class="overview-app-metrics"><span class="overview-mini-chip">关键词 ${item.keywordCount}</span><span class="overview-mini-chip up">上涨 ${item.up}</span><span class="overview-mini-chip down">下降 ${item.down}</span>${source==='st'?`<span class="overview-mini-chip">不变 ${item.flat}</span>`:`<span class="overview-mini-chip new">新进榜 ${item.newCount}</span>${item.other?`<span class="overview-mini-chip">其他变动 ${item.other}</span>`:''}`}</div><button type="button" class="overview-open-btn" data-source="${source}" data-app="${encode(item.app)}" data-batch="${encode(item.batch)}" data-country="${encode(item.country||'')}">查看</button></div>`).join(''):`<div class="overview-empty">暂无${escapeHtml(overviewPlatformName(source))}数据</div>`;
+      const rows=sourceGroups.length?sourceGroups.map((item,index)=>`<div class="overview-app-row" data-overview-index="${encode(`${source}|${item.app}|${item.batch}|${item.country}`)}"><div><div class="overview-app-name">${escapeHtml(item.app)}</div><div class="overview-app-meta">${escapeHtml(item.batch || '未命名批次')}</div></div><div class="overview-app-meta">${escapeHtml(item.country || '未标注国家')}</div><div class="overview-app-meta">同步 ${item.syncDays} 天<br>最新 ${escapeHtml(item.latestDate || '—')}</div><div class="overview-app-metrics"><span class="overview-mini-chip">关键词 ${item.keywordCount}</span><span class="overview-mini-chip up">上涨 ${item.up}</span><span class="overview-mini-chip down">下降 ${item.down}</span>${source==='st'?`<span class="overview-mini-chip">不变 ${item.flat}</span>${item.noDataDays?`<span class="overview-mini-chip">无排名 ${item.noDataDays}天</span>`:''}`:`<span class="overview-mini-chip new">新进榜 ${item.newCount}</span>${item.other?`<span class="overview-mini-chip">其他变动 ${item.other}</span>`:''}`}</div><button type="button" class="overview-open-btn" data-source="${source}" data-app="${encode(item.app)}" data-batch="${encode(item.batch)}" data-country="${encode(item.country||'')}">查看</button></div>`).join(''):`<div class="overview-empty">暂无${escapeHtml(overviewPlatformName(source))}数据</div>`;
       return `<div class="overview-platform-block"><div class="overview-platform-header"><div class="overview-platform-title">${escapeHtml(overviewPlatformName(source))}</div><div class="overview-platform-total">关键词 ${totals.keywords}｜上涨 ${totals.up}｜下降 ${totals.down}${source==='st'?'':`｜新进榜 ${totals.newCount}`}</div></div><div class="overview-app-list">${rows}</div></div>`;
     }).join('');
 
@@ -2445,8 +2551,8 @@
     }));
 
     document.getElementById('overviewSourceStatus').innerHTML = groups.length ? groups.map(item => {
-      const status = item.latestDate ? '正常' : '暂无数据';
-      return `<tr><td>${escapeHtml(overviewPlatformName(item.source))}</td><td><b>${escapeHtml(item.app)}</b><br><span class="overview-app-meta">${escapeHtml(item.batch||'—')}</span></td><td>${escapeHtml(item.country||'—')}</td><td>${item.syncDays} 天</td><td>${escapeHtml(item.latestDate||'—')}</td><td>${escapeHtml(formatDateTime(item.lastSync))}</td><td><span class="status-pill ${item.latestDate?'ok':'warn'}">${status}</span></td></tr>`;
+      const status = item.source==='st' && item.noDataDays ? `正常｜无排名 ${item.noDataDays} 天` : (item.latestDate ? '正常' : '暂无排名数据');
+      return `<tr><td>${escapeHtml(overviewPlatformName(item.source))}</td><td><b>${escapeHtml(item.app)}</b><br><span class="overview-app-meta">${escapeHtml(item.batch||'—')}</span></td><td>${escapeHtml(item.country||'—')}</td><td>${item.syncDays} 天</td><td>${escapeHtml(item.latestDate||'—')}</td><td>${escapeHtml(formatDateTime(item.lastSync))}</td><td><span class="status-pill ${item.latestDate?'ok':'warn'}">${escapeHtml(status)}</span></td></tr>`;
     }).join('') : `<tr><td colspan="7" class="overview-empty">当前筛选范围暂无数据</td></tr>`;
   }
 
@@ -2467,7 +2573,7 @@
   function exportUnifiedData() {
     const payload = {
       version:DASHBOARD_VERSION, exportedAt:new Date().toISOString(),
-      st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()) },
+      st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()), processingStatuses:getStProcessingStatuses() },
       qimai:{ snapshots:getQimaiSnapshots() }, diandian:{ snapshots:getDiandianSnapshots() }, syncLogs:getSyncLogs()
     };
     downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }), `aso-data-center-backup-${new Date().toISOString().slice(0,10)}.json`);
@@ -2482,6 +2588,7 @@
         else if (Array.isArray(parsed.data)) mergeIncomingData(parsed.data);
         if (parsed.st?.notes) mergeIncomingNotes(parsed.st.notes);
         else if (Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
+        if (Array.isArray(parsed.st?.processingStatuses)) saveStProcessingStatuses([...getStProcessingStatuses(), ...parsed.st.processingStatuses]);
         if (parsed.qimai?.snapshots || parsed.qimaiState) mergeQimaiPayload(parsed.qimai || parsed, 'import');
         if (parsed.diandian?.snapshots || parsed.diandianState) mergeDiandianPayload(parsed.diandian || parsed, 'import');
         if (Array.isArray(parsed.syncLogs)) localStorage.setItem(SYNC_LOG_KEY, JSON.stringify([...parsed.syncLogs, ...getSyncLogs()].slice(0,200)));
@@ -2539,8 +2646,11 @@
     const ddChangedCount = dedupeQimaiRows(ddSnapshots,'rank_changed').length;
     const ddNewCount = dedupeQimaiRows(ddSnapshots,'new_entry').length;
     const logs = getSyncLogs();
+    const stStatuses = getStProcessingStatuses();
+    const noDataCount = stStatuses.filter(item=>item.status==='completed_no_data').length;
     const rows = [
       ['Sensor Tower', `${st.length.toLocaleString()} 条原始排名记录`, MASTER_KEY],
+      ['ST 处理状态', `${stStatuses.length.toLocaleString()} 个日期状态｜无排名 ${noDataCount}`, ST_STATUS_KEY],
       ['iOS 七麦快照', `${snapshots.length.toLocaleString()} 个日期快照`, QIMAI_KEY],
       ['iOS 排名变动', `${changedCount.toLocaleString()} 条跨日期去重记录`, 'rank_changed'],
       ['iOS 新进榜', `${newCount.toLocaleString()} 条跨日期去重记录`, 'new_entry'],
@@ -2677,7 +2787,7 @@
     const uniqueSources = new Set(rows.flatMap(item => item.sourceKeywords));
     document.getElementById('ddSummaryLine').innerHTML = [
       `当前类型：${ddCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动'}`,
-      `关键词：${rows.length}`, `历史记录：${rawRows.length}`, `来源词：${uniqueSources.size}`, `最新日期：${latestDate}`, '按搜索指数降序'
+      `关键词：${rows.length}`, `历史记录：${rawRows.length}`, `来源词：${uniqueSources.size}`, `最新日期：${latestDate}`, formatIosIndexThreshold(), '按搜索指数降序'
     ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
     document.getElementById('ddTableHead').innerHTML = `<tr><th>关键词</th><th>来源词</th><th>最新抓取日期</th><th>${ddCategory==='new_entry'?'最新状态':'最新排名变动'}</th><th>${sortButtonHtml('diandian', ddIndexSort)}</th><th>最新排名</th><th>历史追踪</th></tr>`;
     document.querySelector('[data-index-sort="diandian"]')?.addEventListener('click', () => {
@@ -2700,17 +2810,30 @@
 
   function normalizeCrossAppIdentity(row) {
     const app = String(row?.app || '').normalize('NFKC')
-      .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/\s+/g, ' ').trim().toLowerCase();
-    return app || String(row?.appStoreId || '').trim().toLowerCase();
+      .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '')
+      .trim();
+    const appStoreId = String(row?.appStoreId || '').replace(/\D/g, '');
+    return app || appStoreId;
   }
 
   function normalizeCrossKeyword(value) {
     return String(value || '').normalize('NFKC')
-      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
       .replace(/\u00A0/g, ' ')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
       .replace(/\s+/g, ' ')
-      .trim().toLowerCase();
+      .trim();
+  }
+
+  function crossEntityKey(row) {
+    const keyword = normalizeCrossKeyword(row?.keywordNormalized || row?.keyword);
+    if (!keyword) return '';
+    // 选择具体 App 后，仅按关键词做跨来源合并，避免 App 名、ID 或隐藏字符差异导致重复。
+    if (crossFilters.app) return keyword;
+    return [normalizeCrossAppIdentity(row), keyword].join('|');
   }
 
   function getCrossSourceRows(snapshots) {
@@ -2733,9 +2856,8 @@
   function latestSourceKeywordRows(rows) {
     const map = new Map();
     (rows || []).forEach(row => {
-      // 交叉验证页的显示键只使用 App + 标准化关键词。
-      // 批次、国家先由页面筛选器过滤，避免“全部批次/全部国家”时同词重复成多行。
-      const key = [normalizeCrossAppIdentity(row), normalizeCrossKeyword(row.keywordNormalized || row.keyword)].join('|');
+      const key = crossEntityKey(row);
+      if (!key) return;
       const current = map.get(key);
       if (!current || crossRowTime(row) > crossRowTime(current) || (
         crossRowTime(row) === crossRowTime(current) && String(row.capturedAt || '') > String(current.capturedAt || '')
@@ -2789,6 +2911,7 @@
       `方向一致：${high}`,
       `仅七麦：${rows.filter(i=>i.q&&!i.d).length}`,
       `仅点点：${rows.filter(i=>!i.q&&i.d).length}`,
+      formatIosIndexThreshold(),
       '同一关键词已合并'
     ].map(text=>`<span class="summary-chip">${text}</span>`).join('');
     document.getElementById('crossEmpty').classList.toggle('hidden', rows.length > 0);
@@ -2867,6 +2990,16 @@
   window.ASO_DASHBOARD_RECEIVE = async function(payload = {}) {
     const source = String(payload.source || '').toLowerCase();
     try {
+      const isSt = source === 'sensortower' || source === 'st' || source === 'sensortower_status' || Boolean(payload.stStatus || payload.statusRecord || payload.statusRecords || payload.data);
+      if (isSt && !['qimai_ios','qimai','diandian_ios','diandian'].includes(source)) {
+        const incomingData = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.records) ? payload.records : []);
+        if (incomingData.length) mergeIncomingData(incomingData);
+        const statusCount = mergeStStatusPayload(payload);
+        if (!incomingData.length && !statusCount) return { ok:false, code:'invalid_st_payload', message:'ST 同步数据为空。', dashboardVersion:DASHBOARD_VERSION };
+        addSyncLog({ source:'sensortower', status:'success', message:`插件自动同步 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。` });
+        renderDashboard(); renderOverview(); renderStorageSummary();
+        return { ok:true, code:'saved', message:`已保存 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。`, count:incomingData.length, statusCount, dashboardVersion:DASHBOARD_VERSION, receivedAt:new Date().toISOString() };
+      }
       const isDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload.diandianState);
       if (payload.verifySnapshot) {
         if (isDiandian) {
@@ -2906,8 +3039,10 @@
     return {
       ok:true,
       dashboardVersion:DASHBOARD_VERSION,
+      stProcessingStatuses:getStProcessingStatuses().length,
       qimaiSnapshots:getQimaiSnapshots().length,
       diandianSnapshots:getDiandianSnapshots().length,
+      iosMinIndex:IOS_MIN_INDEX,
       lastSync:getSyncLogs()[0]?.at || ''
     };
   };
