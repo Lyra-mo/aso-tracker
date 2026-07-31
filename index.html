@@ -237,7 +237,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.8</span>
+      <span class="version-badge">v2.2.9</span>
     </header>
 
     <main class="page-wrap">
@@ -452,7 +452,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.8';
+  const DASHBOARD_VERSION = '2.2.9';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -3208,6 +3208,31 @@
       return { ok:false, code:'save_failed', message:error.message || String(error), dashboardVersion:DASHBOARD_VERSION };
     }
   };
+
+
+  // 持久化桥接：扩展内容脚本通过 window.postMessage 与页面主世界通信。
+  // 相比每次临时注入函数，该通道在看板加载完成后持续存在，并返回明确保存确认。
+  (() => {
+    const CHANNEL = 'aso-dashboard-extension-bridge-v1';
+    if (window.__ASO_DASHBOARD_PAGE_BRIDGE__) return;
+    window.__ASO_DASHBOARD_PAGE_BRIDGE__ = true;
+    window.addEventListener('message', async event => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = event.data;
+      if (!message || message.channel !== CHANNEL || message.type !== 'request') return;
+      let ack;
+      try {
+        if (typeof window.ASO_DASHBOARD_RECEIVE !== 'function') {
+          ack = { ok:false, code:'receiver_not_ready', message:'看板接收器尚未完成初始化。', dashboardVersion:DASHBOARD_VERSION };
+        } else {
+          ack = await window.ASO_DASHBOARD_RECEIVE(message.payload || {});
+        }
+      } catch (error) {
+        ack = { ok:false, code:'bridge_save_failed', message:error?.message || String(error), dashboardVersion:DASHBOARD_VERSION };
+      }
+      window.postMessage({ channel:CHANNEL, type:'response', requestId:message.requestId, ack }, location.origin);
+    });
+  })();
 
   window.ASO_DASHBOARD_STATUS = function() {
     return {
