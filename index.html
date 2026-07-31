@@ -213,6 +213,12 @@
     .cross-trend-title-wrap { min-width:0; }
     .cross-trend-title-wrap h3 { margin:0 0 4px; }
     .cross-trend-context { color:#718096; font-size:13px; }
+    .ios-keyword-trend.trend-selected { color:#1a56db; text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:3px; }
+    .ios-keyword-trend::after { content:' ↗'; font-size:10px; color:#90a4bd; opacity:.75; }
+    .back-to-top-btn { position:fixed; right:24px; bottom:24px; z-index:80; display:flex; align-items:center; gap:6px; border:0; border-radius:999px; padding:10px 14px; background:#2b6cb0; color:#fff; font-weight:700; cursor:pointer; box-shadow:0 8px 24px rgba(43,108,176,.28); opacity:0; visibility:hidden; transform:translateY(12px); transition:opacity .2s ease, transform .2s ease, visibility .2s ease; }
+    .back-to-top-btn.show { opacity:1; visibility:visible; transform:translateY(0); }
+    .back-to-top-btn:hover { background:#245a92; }
+    .back-to-top-btn:focus-visible { outline:3px solid rgba(66,153,225,.45); outline-offset:3px; }
     .hidden { display:none !important; }
     @media (max-width:1200px) { .cards { grid-template-columns:repeat(3,1fr); } .two-col { grid-template-columns:1fr; } }
     @media (max-width:760px) { .topbar { align-items:flex-start; flex-direction:column; } .cards { grid-template-columns:repeat(2,1fr); } .page-wrap { padding:12px; } .detail-grid { grid-template-columns:repeat(2,1fr); } .overview-app-row { grid-template-columns:1fr; } .overview-status-table { min-width:760px; } }
@@ -237,7 +243,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.10</span>
+      <span class="version-badge">v2.2.11</span>
     </header>
 
     <main class="page-wrap">
@@ -305,7 +311,7 @@
       </section>
 
       <section id="iosSection" class="page-section">
-        <div class="page-heading"><div><h2>iOS 七麦</h2><p>同一个关键词合并为一行，只展示搜索指数 ≥ 4,605 的排名变动和新进榜记录；勾选关键词可查看排名趋势。</p></div><div class="version-badge" id="iosRecordBadge">0 条</div></div>
+        <div class="page-heading"><div><h2>iOS 七麦</h2><p>同一个关键词合并为一行，只展示搜索指数 ≥ 4,605 的排名变动和新进榜记录；点击关键词或勾选后可查看排名趋势。</p></div><div class="version-badge" id="iosRecordBadge">0 条</div></div>
         <div class="control-panel">
           <div class="section-tabs">
             <button class="section-tab active" data-ios-category="rank_changed">相关词＋排名变动</button>
@@ -323,12 +329,12 @@
           <div class="ios-selection-actions">
             <button id="iosClearSelectionBtn" class="action-btn">清除勾选</button>
             <button id="iosClearCurrentBtn" class="action-btn danger">清空当前筛选数据</button>
-            <span id="iosSelectionNote" class="ios-selection-note">勾选关键词后，下方折线图会显示跨日期排名趋势。</span>
+            <span id="iosSelectionNote" class="ios-selection-note">点击关键词或勾选后，下方折线图会显示跨日期排名趋势。</span>
           </div>
         </div>
         <div class="panel ios-chart-panel">
-          <div class="panel-title"><h3>勾选关键词排名趋势</h3><span class="version-badge" id="iosSelectedBadge">已选 0</span></div>
-          <div id="iosOverviewTrendEmpty" class="ios-chart-empty">请在下方表格勾选 1–8 个关键词。折线图按实际抓取日期展示排名，排名数字越小越好。</div>
+          <div class="panel-title"><h3>关键词排名趋势</h3><span class="version-badge" id="iosSelectedBadge">已选 0</span></div>
+          <div id="iosOverviewTrendEmpty" class="ios-chart-empty">请点击下方关键词，或勾选 1–8 个关键词。折线图按实际抓取日期展示排名，排名数字越小越好。</div>
           <div id="iosOverviewTrendChart" class="hidden" style="width:100%;height:360px;"></div>
         </div>
         <div id="iosEmpty" class="empty-box">暂无七麦数据。可从“数据管理”导入插件导出的 14 天历史 JSON；插件同步接入后也会自动进入这里。</div>
@@ -357,6 +363,11 @@
             <div class="filter-field"><label for="ddKeywordInput">结果关键词</label><input id="ddKeywordInput" class="text-input" placeholder="搜索关键词"></div>
           </div>
           <div class="summary-line" id="ddSummaryLine"></div>
+        </div>
+        <div class="panel ios-chart-panel" id="ddTrendPanel">
+          <div class="panel-title"><h3 id="ddTrendTitle">关键词排名趋势</h3><button id="ddTrendClearBtn" class="action-btn hidden">清除曲线</button></div>
+          <div id="ddTrendEmpty" class="ios-chart-empty">点击下方关键词，即可在这里查看该词的跨日期排名曲线。</div>
+          <div id="ddTrendChart" class="hidden" style="width:100%;height:360px;"></div>
         </div>
         <div id="ddEmpty" class="empty-box">暂无点点数据。插件抓取完成后会自动同步到这里。</div>
         <div id="ddTableWrap" class="table-wrap hidden">
@@ -429,6 +440,8 @@
     </main>
   </div>
 
+  <button id="backToTopBtn" class="back-to-top-btn" type="button" aria-label="回到页面顶部">↑ 回到顶部</button>
+
   <div id="keywordDrawerMask" class="drawer-mask" aria-hidden="true">
     <aside class="drawer">
       <div class="drawer-head"><div><h2 id="drawerKeyword" style="margin:0"></h2><p id="drawerSubtitle" class="hint"></p></div><button id="drawerCloseBtn" class="drawer-close">×</button></div>
@@ -452,11 +465,14 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.10';
+  const DASHBOARD_VERSION = '2.2.11';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
   let iosOverviewTrendChart = null;
+  let ddTrendChart = null;
+  let ddSelectedTrendKey = '';
+  let ddCurrentRows = [];
   let crossTrendChart = null;
   let crossSelectedKey = '';
   let crossCurrentRows = [];
@@ -2163,7 +2179,7 @@
     badge.textContent = `已选 ${selectedKeys.length}`;
     document.getElementById('iosSelectionNote').textContent = selectedKeys.length
       ? `已勾选 ${selectedKeys.length} 个关键词；折线图最多同时展示 ${MAX_IOS_TREND_SERIES} 条。`
-      : '勾选关键词后，下方折线图会显示跨日期排名趋势。';
+      : '点击关键词或勾选后，下方折线图会显示跨日期排名趋势。';
 
     if (!selectedKeys.length || !window.echarts) {
       empty.classList.remove('hidden');
@@ -2308,7 +2324,7 @@
       const entityKey = iosKeywordEntityKey(row);
       return `<tr>
         <td><input class="ios-checkbox ios-row-select" type="checkbox" data-row-index="${index}" ${selectedIosKeywords.has(entityKey) ? 'checked' : ''}></td>
-        <td class="ios-keyword-main"><button class="keyword-link ios-keyword-detail" data-row-index="${index}">${escapeHtml(row.keyword)}</button></td>
+        <td class="ios-keyword-main"><button class="keyword-link ios-keyword-trend ${selectedIosKeywords.has(entityKey) ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
         <td>${renderIosSourceChips(row.sourceKeywords)}</td>
         <td class="ios-latest-date">${escapeHtml(row.latestDate || row.date || '—')}</td>
         <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(iosCategory === 'new_entry' ? '新进榜' : (row.rankChangeText || '—'))}</td>
@@ -2316,6 +2332,23 @@
         <td class="ios-history-cell">${renderIosHistoryChips(row.history, iosCategory, index)}</td>
       </tr>`;
     }).join('');
+    document.querySelectorAll('.ios-keyword-trend').forEach(button => button.addEventListener('click', () => {
+      const row = rows[Number(button.dataset.rowIndex)];
+      if (!row) return;
+      const key = iosKeywordEntityKey(row);
+      if (!selectedIosKeywords.has(key)) {
+        if (selectedIosKeywords.size >= MAX_IOS_TREND_SERIES) {
+          alert(`最多同时展示 ${MAX_IOS_TREND_SERIES} 个关键词，请先清除部分勾选。`);
+          return;
+        }
+        selectedIosKeywords.add(key);
+        saveIosSelection();
+        renderIosDashboard();
+      } else {
+        renderIosOverviewTrend();
+      }
+      requestAnimationFrame(() => document.querySelector('#iosSection .ios-chart-panel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+    }));
     document.querySelectorAll('.ios-keyword-detail').forEach(button => button.addEventListener('click', () => openKeywordDrawer(rows[Number(button.dataset.rowIndex)])));
     document.querySelectorAll('.ios-row-select').forEach(input => input.addEventListener('change', () => {
       const row = rows[Number(input.dataset.rowIndex)];
@@ -2845,6 +2878,46 @@
     }).join('')}</div>`;
   }
 
+  function diandianTrendEntityKey(row) {
+    return iosKeywordEntityKey(row);
+  }
+
+  function renderDiandianTrend(rows = ddCurrentRows) {
+    const empty = document.getElementById('ddTrendEmpty');
+    const chartEl = document.getElementById('ddTrendChart');
+    const clearBtn = document.getElementById('ddTrendClearBtn');
+    const title = document.getElementById('ddTrendTitle');
+    const selected = (rows || []).find(row => diandianTrendEntityKey(row) === ddSelectedTrendKey);
+    if (!selected) {
+      ddSelectedTrendKey = '';
+      empty?.classList.remove('hidden');
+      chartEl?.classList.add('hidden');
+      clearBtn?.classList.add('hidden');
+      if (title) title.textContent = '关键词排名趋势';
+      if (ddTrendChart) ddTrendChart.clear();
+      return;
+    }
+    const history = [...(selected.history || [])].sort((a,b) => parseDate(a.date) - parseDate(b.date));
+    const dates = [...new Set(history.map(item => item.date).filter(Boolean))];
+    const rankByDate = {};
+    history.forEach(item => { if (Number.isFinite(item.rank)) rankByDate[item.date] = item.rank; });
+    if (title) title.textContent = `${selected.keyword}｜排名趋势`;
+    empty?.classList.add('hidden');
+    chartEl?.classList.remove('hidden');
+    clearBtn?.classList.remove('hidden');
+    if (!window.echarts || !chartEl) return;
+    if (!ddTrendChart) ddTrendChart = echarts.init(chartEl);
+    ddTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ data:['点点排名'] },
+      grid:{ left:48,right:24,top:48,bottom:44,containLabel:true },
+      xAxis:{ type:'category',data:dates,boundaryGap:false },
+      yAxis:{ type:'value',inverse:true,min:1,name:'排名（越小越好）' },
+      series:[{ name:'点点排名',type:'line',connectNulls:false,smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
+    }, true);
+    setTimeout(() => ddTrendChart.resize(), 30);
+  }
+
   function renderDiandianDashboard() {
     renderDiandianSelectors();
     document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
@@ -2866,8 +2939,9 @@
       localStorage.setItem('aso_dd_index_sort_v225', ddIndexSort);
       renderDiandianDashboard();
     });
-    document.getElementById('ddTableBody').innerHTML = rows.slice(0,1000).map(row => `<tr>
-      <td class="ios-keyword-main">${escapeHtml(row.keyword)}</td>
+    ddCurrentRows = rows;
+    document.getElementById('ddTableBody').innerHTML = rows.slice(0,1000).map((row,index) => `<tr>
+      <td class="ios-keyword-main"><button class="keyword-link dd-keyword-trend ${diandianTrendEntityKey(row) === ddSelectedTrendKey ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
       <td>${renderIosSourceChips(row.sourceKeywords)}</td>
       <td class="ios-latest-date">${escapeHtml(row.latestDate || row.date || '—')}</td>
       <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(ddCategory==='new_entry'?'新进榜':(row.rankChangeText||'—'))}</td>
@@ -2875,6 +2949,14 @@
       <td>${displayNumber(row.rank)}</td>
       <td>${renderDiandianHistoryChips(row.history, ddCategory)}</td>
     </tr>`).join('');
+    document.querySelectorAll('.dd-keyword-trend').forEach(button => button.addEventListener('click', () => {
+      const row = rows[Number(button.dataset.rowIndex)];
+      if (!row) return;
+      ddSelectedTrendKey = diandianTrendEntityKey(row);
+      renderDiandianDashboard();
+      requestAnimationFrame(() => document.getElementById('ddTrendPanel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+    }));
+    renderDiandianTrend(rows);
     renderCrossValidation();
     renderStorageSummary();
   }
@@ -3341,6 +3423,16 @@
     safeInitialRender('数据管理', renderStorageSummary);
     safeInitialRender('页面切换', () => showPage(activePage));
 
+    document.getElementById('ddTrendClearBtn')?.addEventListener('click', () => {
+      ddSelectedTrendKey = '';
+      renderDiandianTrend(ddCurrentRows);
+    });
+    const backToTopBtn = document.getElementById('backToTopBtn');
+    const updateBackToTop = () => backToTopBtn?.classList.toggle('show', window.scrollY > 520);
+    window.addEventListener('scroll', updateBackToTop, { passive:true });
+    backToTopBtn?.addEventListener('click', () => window.scrollTo({ top:0, behavior:'smooth' }));
+    updateBackToTop();
+
     document.getElementById('excelCurrentBtn').addEventListener('click', () => {
       const records = getCurrentFilteredRecords();
       const label = buildCurrentScopeLabel(records);
@@ -3376,7 +3468,7 @@
     });
   });
 
-  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); if (crossTrendChart) crossTrendChart.resize(); });
+  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); if (ddTrendChart) ddTrendChart.resize(); if (crossTrendChart) crossTrendChart.resize(); });
 </script>
 </body>
 </html>
