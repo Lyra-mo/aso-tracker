@@ -243,7 +243,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.11</span>
+      <span class="version-badge">v2.2.12</span>
     </header>
 
     <main class="page-wrap">
@@ -465,7 +465,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.11';
+  const DASHBOARD_VERSION = '2.2.12';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -2336,18 +2336,21 @@
       const row = rows[Number(button.dataset.rowIndex)];
       if (!row) return;
       const key = iosKeywordEntityKey(row);
-      if (!selectedIosKeywords.has(key)) {
+      const willSelect = !selectedIosKeywords.has(key);
+      if (willSelect) {
         if (selectedIosKeywords.size >= MAX_IOS_TREND_SERIES) {
-          alert(`最多同时展示 ${MAX_IOS_TREND_SERIES} 个关键词，请先清除部分勾选。`);
+          alert(`最多同时展示 ${MAX_IOS_TREND_SERIES} 个关键词，请先取消部分关键词。`);
           return;
         }
         selectedIosKeywords.add(key);
-        saveIosSelection();
-        renderIosDashboard();
       } else {
-        renderIosOverviewTrend();
+        selectedIosKeywords.delete(key);
       }
-      requestAnimationFrame(() => document.querySelector('#iosSection .ios-chart-panel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      saveIosSelection();
+      renderIosDashboard();
+      if (willSelect) {
+        requestAnimationFrame(() => document.querySelector('#iosSection .ios-chart-panel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      }
     }));
     document.querySelectorAll('.ios-keyword-detail').forEach(button => button.addEventListener('click', () => openKeywordDrawer(rows[Number(button.dataset.rowIndex)])));
     document.querySelectorAll('.ios-row-select').forEach(input => input.addEventListener('change', () => {
@@ -2420,6 +2423,25 @@
       const bd = new Date(b).getTime();
       return (Number.isFinite(bd) ? bd : 0) - (Number.isFinite(ad) ? ad : 0);
     })[0] || '';
+  }
+
+
+  // 总览页会同时接收 ISO 时间、日期字符串和旧版时间字段。
+  // 旧版缺少该函数会导致 renderOverview 在更新“最近同步时间”时中断，
+  // 从而出现顶部统计有数字、但“最新变化”和“同步状态”整块空白。
+  function formatDateTime(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '—';
+    const date = new Date(raw);
+    if (!Number.isFinite(date.getTime())) return raw;
+    const parts = new Intl.DateTimeFormat('zh-CN', {
+      year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', hour12:false
+    }).formatToParts(date).reduce((map, part) => {
+      map[part.type] = part.value;
+      return map;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
   }
 
   function overviewMetaRows() {
@@ -2952,9 +2974,13 @@
     document.querySelectorAll('.dd-keyword-trend').forEach(button => button.addEventListener('click', () => {
       const row = rows[Number(button.dataset.rowIndex)];
       if (!row) return;
-      ddSelectedTrendKey = diandianTrendEntityKey(row);
+      const key = diandianTrendEntityKey(row);
+      const willSelect = ddSelectedTrendKey !== key;
+      ddSelectedTrendKey = willSelect ? key : '';
       renderDiandianDashboard();
-      requestAnimationFrame(() => document.getElementById('ddTrendPanel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      if (willSelect) {
+        requestAnimationFrame(() => document.getElementById('ddTrendPanel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      }
     }));
     renderDiandianTrend(rows);
     renderCrossValidation();
@@ -3241,9 +3267,11 @@
     document.getElementById('crossTableBody')?.addEventListener('click', event => {
       const button = event.target.closest('[data-cross-key]');
       if (!button) return;
-      crossSelectedKey = decode(button.dataset.crossKey || '');
+      const key = decode(button.dataset.crossKey || '');
+      const willSelect = crossSelectedKey !== key;
+      crossSelectedKey = willSelect ? key : '';
       renderCrossValidation();
-      document.getElementById('crossTrendPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+      if (willSelect) document.getElementById('crossTrendPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
     });
     document.getElementById('crossTrendCloseBtn')?.addEventListener('click', () => { crossSelectedKey=''; renderCrossValidation(); });
     document.getElementById('exportCrossBothBtn')?.addEventListener('click', () => exportCrossValidationExcel(true));
