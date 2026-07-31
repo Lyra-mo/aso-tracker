@@ -237,7 +237,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.9</span>
+      <span class="version-badge">v2.2.10</span>
     </header>
 
     <main class="page-wrap">
@@ -452,7 +452,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.9';
+  const DASHBOARD_VERSION = '2.2.10';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -1757,7 +1757,8 @@
   function saveQimaiSnapshots(snapshots) {
     const map = new Map();
     (snapshots || []).map(normalizeQimaiSnapshot).filter(Boolean).forEach(snapshot => {
-      map.set(qimaiSnapshotKey(snapshot), snapshot);
+      const key = qimaiSnapshotKey(snapshot);
+      map.set(key, map.has(key) ? mergeIosSnapshotRecords(map.get(key), snapshot) : snapshot);
     });
     const sorted = [...map.values()].sort((a, b) => {
       const dateDiff = (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0);
@@ -1766,8 +1767,49 @@
     localStorage.setItem(QIMAI_KEY, JSON.stringify(sorted));
   }
 
+  function canonicalIosAppIdentity(snapshot = {}) {
+    const appStoreId = String(snapshot.appStoreId || snapshot.config?.appStoreId || '').trim().toLowerCase();
+    if (appStoreId) return `id:${appStoreId}`;
+    const app = String(snapshot.app || snapshot.config?.app || 'unknown-app')
+      .normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+    return `app:${app}`;
+  }
+
   function qimaiSnapshotKey(snapshot) {
-    return [snapshot.app, snapshot.appStoreId, snapshot.batch, snapshot.country, snapshot.date].map(value => String(value || '').trim().toLowerCase()).join('__');
+    return ['qimai_ios', canonicalIosAppIdentity(snapshot), snapshot.batch, snapshot.country, snapshot.date]
+      .map(value => String(value || '').trim().toLowerCase()).join('__');
+  }
+
+  function mergeIosSnapshotRows(rows) {
+    const map = new Map();
+    (rows || []).filter(Boolean).forEach(row => {
+      const key = String(row.keywordNormalized || row.keyword || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!key) return;
+      const previous = map.get(key) || {};
+      const sources = [...new Set([
+        ...(Array.isArray(previous.sourceKeywords) ? previous.sourceKeywords : [previous.sourceKeyword]),
+        ...(Array.isArray(row.sourceKeywords) ? row.sourceKeywords : [row.sourceKeyword])
+      ].map(value => String(value || '').trim()).filter(Boolean))];
+      map.set(key, { ...previous, ...row, sourceKeywords:sources });
+    });
+    return [...map.values()];
+  }
+
+  function mergeIosSnapshotRecords(previous, incoming) {
+    const newer = String(incoming.createdAt || '').localeCompare(String(previous.createdAt || '')) >= 0
+      ? incoming : previous;
+    return {
+      ...previous,
+      ...incoming,
+      ...newer,
+      changedResults:mergeIosSnapshotRows([...(previous.changedResults || []), ...(incoming.changedResults || [])]),
+      newEntryResults:mergeIosSnapshotRows([...(previous.newEntryResults || []), ...(incoming.newEntryResults || [])]),
+      failures:[...new Map([...(previous.failures || []), ...(incoming.failures || [])].map(item => [
+        [item?.sourceKeyword, item?.status, item?.message].map(value => String(value || '').trim().toLowerCase()).join('|'),
+        item
+      ])).values()]
+    };
   }
 
   function numberOrNull(value) {
@@ -2697,13 +2739,16 @@
 
   function saveDiandianSnapshots(snapshots) {
     const map = new Map();
-    (snapshots || []).map(normalizeDiandianSnapshot).filter(Boolean).forEach(snapshot => map.set(diandianSnapshotKey(snapshot), snapshot));
+    (snapshots || []).map(normalizeDiandianSnapshot).filter(Boolean).forEach(snapshot => {
+      const key = diandianSnapshotKey(snapshot);
+      map.set(key, map.has(key) ? mergeIosSnapshotRecords(map.get(key), snapshot) : snapshot);
+    });
     const sorted = [...map.values()].sort((a,b) => (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0));
     localStorage.setItem(DIANDIAN_KEY, JSON.stringify(sorted));
   }
 
   function diandianSnapshotKey(snapshot) {
-    return [snapshot.app, snapshot.appStoreId, snapshot.batch, snapshot.country, snapshot.date]
+    return ['diandian_ios', canonicalIosAppIdentity(snapshot), snapshot.batch, snapshot.country, snapshot.date]
       .map(value => String(value || '').trim().toLowerCase()).join('__');
   }
 
@@ -3283,6 +3328,10 @@
     initDataCenterEvents();
     initDiandianEvents();
     safeInitialRender('数据迁移', migrateExistingData);
+    safeInitialRender('iOS 快照键迁移', () => {
+      saveQimaiSnapshots(getQimaiSnapshots());
+      saveDiandianSnapshots(getDiandianSnapshots());
+    });
     safeInitialRender('URL 数据接收', receiveUrlData);
     safeInitialRender('Sensor Tower', renderDashboard);
     safeInitialRender('七麦', renderIosDashboard);
