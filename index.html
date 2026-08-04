@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.7</title>
+  <title>ASO 数据中心 v2.2.13</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -243,7 +243,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.12</span>
+      <span class="version-badge">v2.2.13</span>
     </header>
 
     <main class="page-wrap">
@@ -465,7 +465,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.12';
+  const DASHBOARD_VERSION = '2.2.13';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -607,7 +607,7 @@
         RunMode: String(item.RunMode || item.runMode || '').trim(),
         _ExplicitCheckpoint: explicitCheckpoint
       };
-    }).filter(item => item.Keyword && item.Date && /^\d+$/.test(item.Rank));
+    }).filter(item => item.Keyword && item.Date && /^\d+$/.test(item.Rank) && Number(item.Rank) > 0);
 
     const earliestByAppBatch = {};
     provisional.forEach(item => {
@@ -682,16 +682,76 @@
       return;
     }
 
+    const inferredStatuses = buildZeroRankStatusRecords(records);
+    if (inferredStatuses.length) saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
     saveMasterData(records);
     localStorage.setItem(MIGRATION_KEY, '1');
   }
 
+  function rawStRankNumber(item = {}) {
+    const raw = String(item.Rank ?? item.rank ?? '').replace(/,/g, '').trim();
+    if (!raw) return null;
+    const match = raw.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const value = Number(match[0]);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  // ST 有时会把“页面尚无可用排名”返回为 Rank=0。
+  // 0 不是第 0 名：按无排名日期保存状态，并从排名记录中移除。
+  function buildZeroRankStatusRecords(records) {
+    const groups = new Map();
+    (Array.isArray(records) ? records : []).forEach(item => {
+      const date = resolveStDataDate(item);
+      if (!date) return;
+      const app = String(item.App || item.app || '未命名 App').trim();
+      const batch = String(item.Batch || item.batch || item.batchName || `T1-${compactDate(date)}`).trim();
+      const country = String(item.Country || item.country || '').trim().toUpperCase();
+      const key = [app, batch, country, date].join('|');
+      if (!groups.has(key)) groups.set(key, { app, batch, country, date, hasPositive:false, zeroKeywords:new Set(), capturedAt:'' });
+      const group = groups.get(key);
+      const rank = rawStRankNumber(item);
+      if (Number.isFinite(rank) && rank > 0) group.hasPositive = true;
+      if (rank === 0) group.zeroKeywords.add(String(item.Keyword || item.keyword || '').trim());
+      const capturedAt = item.CapturedAt || item.capturedAt || '';
+      if (String(capturedAt) > String(group.capturedAt)) group.capturedAt = capturedAt;
+    });
+
+    return [...groups.values()]
+      .filter(group => group.zeroKeywords.size > 0 && !group.hasPositive)
+      .map(group => ({
+        app:group.app,
+        batch:group.batch,
+        country:group.country,
+        date:group.date,
+        status:'completed_no_data',
+        capturedAt:group.capturedAt || new Date().toISOString(),
+        reason:'ST 返回 Rank=0，已按无排名日期留空处理。',
+        keywordCount:group.zeroKeywords.size
+      }));
+  }
+
   function mergeIncomingData(newData) {
+    const inferredStatuses = buildZeroRankStatusRecords(newData);
+    if (inferredStatuses.length) {
+      saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
+    }
     const masterData = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
     const incoming = normalizeRecords(newData);
     const map = new Map(masterData.map(item => [recordKey(item), item]));
     incoming.forEach(item => map.set(recordKey(item), item));
     saveMasterData(Array.from(map.values()));
+    return inferredStatuses.length;
+  }
+
+  // 一次性兼容已经存入看板的旧 Rank=0 记录。
+  function repairLegacyZeroRankRecords() {
+    const raw = safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []);
+    if (!Array.isArray(raw) || !raw.some(item => rawStRankNumber(item) === 0)) return 0;
+    const inferredStatuses = buildZeroRankStatusRecords(raw);
+    if (inferredStatuses.length) saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
+    saveMasterData(raw); // normalizeRecords 会自动剔除 Rank=0。
+    return inferredStatuses.length;
   }
 
   function encode(value) {
@@ -1041,6 +1101,36 @@
     return nodes;
   }
 
+  function getStProcessedDatesForScope(app, batch, records = []) {
+    const dates = new Set((records || []).map(item => toDateKey(item.Date)).filter(Boolean));
+    const countries = new Set((records || []).map(overviewCountryOfSt).filter(Boolean));
+    const completedStatuses = new Set(['completed', 'completed_no_data', 'existing', 'completed_range']);
+    getStProcessingStatuses().forEach(status => {
+      if (status.app !== app || status.batch !== batch) return;
+      if (countries.size && status.country && !countries.has(status.country)) return;
+      if (!completedStatuses.has(status.status)) return;
+      if (status.date) dates.add(status.date);
+    });
+    return [...dates].sort((a, b) => parseDate(a) - parseDate(b));
+  }
+
+  function getLatestStProcessedDate(app, batch, records = []) {
+    const dates = getStProcessedDatesForScope(app, batch, records);
+    return dates[dates.length - 1] || '';
+  }
+
+  function getStProcessedDatesForRecords(records = []) {
+    const scopes = new Map();
+    (records || []).forEach(item => {
+      const key = `${item.App}__${item.Batch}`;
+      if (!scopes.has(key)) scopes.set(key, { app:item.App, batch:item.Batch, records:[] });
+      scopes.get(key).records.push(item);
+    });
+    const dates = new Set();
+    scopes.forEach(scope => getStProcessedDatesForScope(scope.app, scope.batch, scope.records).forEach(date => dates.add(date)));
+    return [...dates].sort((a, b) => parseDate(a) - parseDate(b));
+  }
+
   function renderStHistoryManager(records) {
     const sorted = [...records].sort((a, b) => parseDate(b.Date) - parseDate(a.Date) || String(b.CapturedAt || '').localeCompare(String(a.CapturedAt || '')));
     const rows = sorted.map(record => {
@@ -1107,16 +1197,18 @@
     const rows = Object.values(keywordMap).map(records => {
       records.sort((a, b) => parseDate(a.Date) - parseDate(b.Date) || Number(a.Checkpoint ?? 999) - Number(b.Checkpoint ?? 999));
       const first = records[0];
-      const last = records[records.length - 1];
-      const interval = diffDays(last.Date, first.Date);
+      const last = records[records.length - 1]; // 最近一次实际有排名的记录
+      const latestProcessedDate = getLatestStProcessedDate(first.App, first.Batch, records) || last.Date;
+      const latestRecord = chooseLatestRecord(records.filter(item => item.Date === latestProcessedDate));
+      const interval = diffDays(latestProcessedDate, first.Date);
       const firstRank = parseInt(first.Rank, 10);
-      const lastRank = parseInt(last.Rank, 10);
-      const ranks = records.map(item => parseInt(item.Rank, 10)).filter(Number.isFinite);
+      const latestRank = latestRecord ? parseInt(latestRecord.Rank, 10) : null;
+      const ranks = records.map(item => parseInt(item.Rank, 10)).filter(rank => Number.isFinite(rank) && rank > 0);
       const bestRank = ranks.length ? Math.min(...ranks) : null;
-      const diff = firstRank - lastRank;
 
-      let changeHtml = '-';
-      if (records.length > 1) {
+      let changeHtml = '<span class="note-empty">—</span>';
+      if (latestRecord && latestProcessedDate !== first.Date) {
+        const diff = firstRank - latestRank;
         if (diff > 0) changeHtml = `<span class="up">↑ ${diff}</span>`;
         else if (diff < 0) changeHtml = `<span class="down">↓ ${Math.abs(diff)}</span>`;
         else changeHtml = '<span style="color:#718096;">- 0</span>';
@@ -1128,6 +1220,8 @@
         Keyword: first.Keyword,
         first,
         last,
+        latestRecord,
+        latestProcessedDate,
         records,
         interval,
         bestRank,
@@ -1154,8 +1248,11 @@
             <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">删除</button>
           </div>`).join('')
         : `<span class="note-empty">暂无备注</span>`;
-      const noteDateAction = `<div class="note-date-action"><button class="note-date-pick-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.last.Date)}">＋ 选择日期添加备注</button></div>`;
+      const noteDateAction = `<div class="note-date-action"><button class="note-date-pick-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.latestProcessedDate || row.last.Date)}">＋ 选择日期添加备注</button></div>`;
       const noteAndHistoryHtml = `${notesListHtml}${noteDateAction}${historyManager}`;
+      const latestRankHtml = row.latestRecord
+        ? `#${escapeHtml(row.latestRecord.Rank)}`
+        : `<span class="note-empty">—</span><span class="capture-meta">${escapeHtml(row.latestProcessedDate)} 暂无排名</span>`;
 
       return `<tr>
         <td><input class="item-check" type="checkbox" data-key="${encode(key)}" ${selectedItems.includes(key) ? 'checked' : ''}></td>
@@ -1163,7 +1260,7 @@
         <td><span class="batch-tag">${row.Batch}</span></td>
         <td><b>${row.Keyword}</b></td>
         <td>#${row.first.Rank}</td>
-        <td>#${row.last.Rank}</td>
+        <td>${latestRankHtml}</td>
         <td>${Number.isFinite(row.bestRank) ? `#${row.bestRank}` : '—'}</td>
         <td>${row.changeHtml}</td>
         <td class="note-cell">${noteAndHistoryHtml}</td>
@@ -1257,7 +1354,7 @@
   }
 
   function updateChart(data) {
-    const sortedDates = [...new Set(data.map(item => item.Date))].sort((a, b) => parseDate(a) - parseDate(b));
+    const sortedDates = getStProcessedDatesForRecords(data);
     const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
     const validRanks = data
       .map(item => Number(item.Rank))
@@ -1278,7 +1375,8 @@
         };
       }
       const index = dates.indexOf(item.Date);
-      if (index !== -1) acc[key].data[index] = parseInt(item.Rank, 10);
+      const rank = Number(item.Rank);
+      if (index !== -1 && Number.isFinite(rank) && rank > 0) acc[key].data[index] = rank;
       return acc;
     }, {});
 
@@ -1371,8 +1469,9 @@
     });
   }
 
-  function formatRankPoint(record) {
-    return record ? `#${record.Rank} (${record.Date})` : '';
+  function formatRankPoint(record, emptyDate = '') {
+    if (record) return `#${record.Rank} (${record.Date})`;
+    return emptyDate ? `— (${emptyDate})` : '';
   }
 
   function safeFilePart(value) {
@@ -1406,8 +1505,7 @@
     document.body.appendChild(container);
 
     const exportChart = echarts.init(container, null, { renderer: 'canvas' });
-    const sortedDates = [...new Set(records.map(item => item.Date))]
-      .sort((a, b) => parseDate(a) - parseDate(b));
+    const sortedDates = getStProcessedDatesForScope(app, batch, records);
     const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
     const keywordMap = {};
 
@@ -1422,7 +1520,9 @@
           data: new Array(dates.length).fill(null)
         };
       }
-      keywordMap[item.Keyword].data[dates.indexOf(item.Date)] = Number(item.Rank);
+      const index = dates.indexOf(item.Date);
+      const rank = Number(item.Rank);
+      if (index !== -1 && Number.isFinite(rank) && rank > 0) keywordMap[item.Keyword].data[index] = rank;
     });
 
     const validRanks = records
@@ -1591,14 +1691,15 @@
       const groups = groupRecordsForReport(records);
       groups.forEach(group => {
         const first = group[0];
-        const last = group[group.length - 1];
-        const rankChange = Number(first.Rank) - Number(last.Rank);
+        const latestProcessedDate = getLatestStProcessedDate(first.App, first.Batch, group) || group[group.length - 1].Date;
+        const latest = chooseLatestRecord(group.filter(item => item.Date === latestProcessedDate));
+        const rankChange = latest ? Number(first.Rank) - Number(latest.Rank) : '';
         const row = summarySheet.addRow([
           first.App,
           first.Batch,
           first.Keyword,
           formatRankPoint(first),
-          formatRankPoint(last),
+          formatRankPoint(latest, latestProcessedDate),
           rankChange,
           getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
             .map(note => `${note.Date}：${note.Text}`)
@@ -1621,11 +1722,11 @@
         });
 
         const changeCell = row.getCell(6);
-        changeCell.numFmt = '+0;-0;0';
-        if (rankChange > 0) {
+        if (Number.isFinite(rankChange)) changeCell.numFmt = '+0;-0;0';
+        if (Number.isFinite(rankChange) && rankChange > 0) {
           changeCell.font = { bold: true, color: { argb: 'FF25855A' } };
           changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6F6D5' } };
-        } else if (rankChange < 0) {
+        } else if (Number.isFinite(rankChange) && rankChange < 0) {
           changeCell.font = { bold: true, color: { argb: 'FFC53030' } };
           changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFED7D7' } };
         }
@@ -3322,8 +3423,8 @@
       const isSt = source === 'sensortower' || source === 'st' || source === 'sensortower_status' || Boolean(payload.stStatus || payload.statusRecord || payload.statusRecords || payload.data);
       if (isSt && !['qimai_ios','qimai','diandian_ios','diandian'].includes(source)) {
         const incomingData = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.records) ? payload.records : []);
-        if (incomingData.length) mergeIncomingData(incomingData);
-        const statusCount = mergeStStatusPayload(payload);
+        const inferredStatusCount = incomingData.length ? mergeIncomingData(incomingData) : 0;
+        const statusCount = mergeStStatusPayload(payload) + inferredStatusCount;
         if (!incomingData.length && !statusCount) return { ok:false, code:'invalid_st_payload', message:'ST 同步数据为空。', dashboardVersion:DASHBOARD_VERSION };
         addSyncLog({ source:'sensortower', status:'success', message:`插件自动同步 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。` });
         renderDashboard(); renderOverview(); renderStorageSummary();
@@ -3438,6 +3539,7 @@
     initDataCenterEvents();
     initDiandianEvents();
     safeInitialRender('数据迁移', migrateExistingData);
+    safeInitialRender('ST 无排名修复', repairLegacyZeroRankRecords);
     safeInitialRender('iOS 快照键迁移', () => {
       saveQimaiSnapshots(getQimaiSnapshots());
       saveDiandianSnapshots(getDiandianSnapshots());
