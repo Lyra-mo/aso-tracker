@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.13</title>
+  <title>ASO 数据中心 v2.2.14</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -243,7 +243,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.13</span>
+      <span class="version-badge">v2.2.14</span>
     </header>
 
     <main class="page-wrap">
@@ -298,7 +298,7 @@
           <div class="selector-title">测试批次筛选</div>
           <div id="batchSelector" class="selector"></div>
           <div id="stProcessSummary" class="summary-line"></div>
-          <div class="hint">折线图使用全部日数据并连接缺失点；备注可自行选择任意日期添加。主表显示首刷排名、最新排名与历史最高排名，完整日期仍保留在历史管理中。ST 仍使用原存储键 aso_master_data。</div>
+          <div class="hint">折线图保留全部日数据点并连接缺失点；横轴日期会按跨度与窗口宽度自动稀疏显示，首尾日期及重要节点优先保留。鼠标悬停仍可查看每一天的准确排名。备注可自行选择任意日期添加。主表显示首刷排名、最新排名与历史最高排名，完整日期仍保留在历史管理中。ST 仍使用原存储键 aso_master_data。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
         <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
@@ -465,7 +465,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.13';
+  const DASHBOARD_VERSION = '2.2.14';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -505,6 +505,8 @@
   let stNodeIntervalDays = Number(localStorage.getItem('st_node_interval_days') || 7);
   if (![0, 7, 14].includes(stNodeIntervalDays)) stNodeIntervalDays = 7;
   let selectedIosKeywords = new Set(safeJsonParse(localStorage.getItem(IOS_SELECTION_KEY) || '[]', []));
+  let lastStChartData = [];
+  let stChartResizeTimer = null;
 
   function parseDate(value) {
     const match = String(value || '').match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
@@ -1065,6 +1067,73 @@
     return dates;
   }
 
+
+  // 趋势图保留每日数据点，只对横轴日期标签做自适应稀疏显示。
+  // 基础节奏：7 天内每日、8–14 天每 2 天、15–30 天每 3 天、31–60 天每 5 天，
+  // 更长区间按 7/14/30 天递增；窄窗口会自动进一步减少标签。
+  function chooseAdaptiveDateLabelStep(dateCount, chartWidth = 1200) {
+    const count = Math.max(0, Number(dateCount) || 0);
+    if (count <= 1) return 1;
+
+    let baseStep = 1;
+    if (count <= 7) baseStep = 1;
+    else if (count <= 14) baseStep = 2;
+    else if (count <= 30) baseStep = 3;
+    else if (count <= 60) baseStep = 5;
+    else if (count <= 120) baseStep = 7;
+    else if (count <= 240) baseStep = 14;
+    else baseStep = 30;
+
+    // 7 天以内始终逐日展示；更长区间才根据可用宽度进一步稀疏。
+    if (count <= 7) return 1;
+    const width = Number.isFinite(Number(chartWidth)) && Number(chartWidth) > 0 ? Number(chartWidth) : 1200;
+    const targetLabels = Math.max(6, Math.min(12, Math.floor(Math.max(540, width - 80) / 90)));
+    const widthStep = Math.max(1, Math.ceil((count - 1) / Math.max(1, targetLabels - 1)));
+    const requiredStep = Math.max(baseStep, widthStep);
+    const allowedSteps = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60, 90];
+    return allowedSteps.find(step => step >= requiredStep) || Math.ceil(requiredStep / 30) * 30;
+  }
+
+  function formatAdaptiveDateLabel(value, index, dates) {
+    const key = toDateKey(value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return String(value || '');
+    const isEdge = index === 0 || index === dates.length - 1;
+    const previous = index > 0 ? toDateKey(dates[index - 1]) : '';
+    const yearChanged = previous && previous.slice(0, 4) !== key.slice(0, 4);
+    return isEdge || yearChanged ? key : key.slice(5);
+  }
+
+  function buildAdaptiveDateAxis(dates, options = {}) {
+    const values = Array.isArray(dates) ? dates : [];
+    const forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
+    const step = chooseAdaptiveDateLabelStep(values.length, options.chartWidth);
+    const lastIndex = Math.max(0, values.length - 1);
+    const shouldShow = (index, value) => {
+      if (index === 0 || index === lastIndex) return true;
+      if (forcedDates.has(toDateKey(value))) return true;
+      return index % step === 0;
+    };
+
+    return {
+      type: 'category',
+      boundaryGap: options.boundaryGap === undefined ? false : Boolean(options.boundaryGap),
+      data: values,
+      axisLabel: {
+        interval: shouldShow,
+        formatter: (value, index) => formatAdaptiveDateLabel(value, index, values),
+        hideOverlap: true,
+        showMinLabel: true,
+        showMaxLabel: true,
+        rotate: 0,
+        margin: 12
+      },
+      axisTick: { alignWithLabel: true, interval: shouldShow },
+      axisPointer: {
+        label: { formatter: params => toDateKey(params.value) || String(params.value || '') }
+      }
+    };
+  }
+
   function chooseLatestRecord(records) {
     return [...records].sort((a, b) => {
       const left = a.CapturedAt ? new Date(a.CapturedAt).getTime() : 0;
@@ -1354,7 +1423,8 @@
   }
 
   function updateChart(data) {
-    const sortedDates = getStProcessedDatesForRecords(data);
+    lastStChartData = Array.isArray(data) ? data.slice() : [];
+    const sortedDates = getStProcessedDatesForRecords(lastStChartData);
     const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
     const validRanks = data
       .map(item => Number(item.Rank))
@@ -1425,11 +1495,20 @@
     }
 
     if (!chart) return;
+    const forcedDates = [
+      ...notes.map(item => item.Date),
+      ...data.filter(item => CHECKPOINTS.includes(Number(item.Checkpoint))).map(item => item.Date)
+    ];
+    const xAxis = buildAdaptiveDateAxis(dates, {
+      chartWidth: chart.getWidth(),
+      forcedDates,
+      boundaryGap: false
+    });
     chart.setOption({
       tooltip: { trigger: 'axis' },
       legend: { type: 'scroll', show: true, top: 6 },
       grid: { left: 55, right: 35, top: 55, bottom: 72, containLabel: true },
-      xAxis: { type: 'category', data: dates },
+      xAxis,
       yAxis: { type: 'value', inverse: true, name: '排名', min: 1, max: axisMax },
       series
     }, true);
@@ -1552,12 +1631,14 @@
         right: 30
       },
       grid: { left: 70, right: 40, top: 85, bottom: 85 },
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: dates,
-        axisLabel: { rotate: dates.length > 8 ? 35 : 0 }
-      },
+      xAxis: buildAdaptiveDateAxis(dates, {
+        chartWidth: 1400,
+        forcedDates: [
+          ...getNotesForBatch(app, batch, dates).map(note => note.Date),
+          ...records.filter(item => CHECKPOINTS.includes(Number(item.Checkpoint))).map(item => item.Date)
+        ],
+        boundaryGap: false
+      }),
       yAxis: {
         type: 'value',
         inverse: true,
@@ -2313,7 +2394,7 @@
       tooltip:{ trigger:'axis' },
       legend:{ type:'scroll', top:0 },
       grid:{ left:52, right:24, top:54, bottom:48, containLabel:true },
-      xAxis:{ type:'category', data:allDates, name:'抓取日期' },
+      xAxis:{ ...buildAdaptiveDateAxis(allDates, { chartWidth:document.getElementById('iosOverviewTrendChart')?.clientWidth || 1200, boundaryGap:false }), name:'抓取日期' },
       yAxis:{ type:'value', inverse:true, min:1, name:'排名（越小越好）' },
       series
     }, true);
@@ -2493,7 +2574,7 @@
       stats.history.forEach(item => { if (Number.isFinite(item.rank)) rankByDate[item.date] = item.rank; });
       iosTrendChart.setOption({
         tooltip: { trigger:'axis' }, grid:{ left:45,right:20,top:30,bottom:42,containLabel:true },
-        xAxis:{ type:'category',data:dates }, yAxis:{ type:'value',inverse:true,name:'排名',min:1 },
+        xAxis:buildAdaptiveDateAxis(dates, { chartWidth:document.getElementById('iosTrendChart')?.clientWidth || 720, boundaryGap:false }), yAxis:{ type:'value',inverse:true,name:'排名',min:1 },
         series:[{ name:'排名',type:'line',smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
       }, true);
       setTimeout(() => iosTrendChart.resize(), 30);
@@ -2786,7 +2867,10 @@
     localStorage.setItem('aso_active_page_v200', activePage);
     document.querySelectorAll('.page-section').forEach(section => section.classList.toggle('active', section.id === activePage));
     document.querySelectorAll('.nav-btn').forEach(button => button.classList.toggle('active', button.dataset.page === activePage));
-    if (activePage === 'stSection' && chart) setTimeout(() => chart.resize(), 30);
+    if (activePage === 'stSection' && chart) setTimeout(() => {
+      chart.resize();
+      updateChart(lastStChartData);
+    }, 30);
     if (activePage === 'iosSection') renderIosDashboard();
     if (activePage === 'diandianSection') renderDiandianDashboard();
     if (activePage === 'crossSection') renderCrossValidation();
@@ -3034,7 +3118,7 @@
       tooltip:{ trigger:'axis' },
       legend:{ data:['点点排名'] },
       grid:{ left:48,right:24,top:48,bottom:44,containLabel:true },
-      xAxis:{ type:'category',data:dates,boundaryGap:false },
+      xAxis:buildAdaptiveDateAxis(dates, { chartWidth:chartEl?.clientWidth || 1200, boundaryGap:false }),
       yAxis:{ type:'value',inverse:true,min:1,name:'排名（越小越好）' },
       series:[{ name:'点点排名',type:'line',connectNulls:false,smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
     }, true);
@@ -3218,7 +3302,7 @@
       tooltip:{ trigger:'axis' },
       legend:{ type:'scroll', top:0 },
       grid:{ left:58, right:28, top:52, bottom:48 },
-      xAxis:{ type:'category', data:dates, boundaryGap:false },
+      xAxis:buildAdaptiveDateAxis(dates, { chartWidth:document.getElementById('crossTrendChart')?.clientWidth || 1200, boundaryGap:false }),
       yAxis:{ type:'value', inverse:true, min:1, name:'排名' },
       series:seriesDefs.map(def => ({
         name:def.name,
@@ -3598,7 +3682,17 @@
     });
   });
 
-  window.addEventListener('resize', () => { if (chart) chart.resize(); if (iosTrendChart) iosTrendChart.resize(); if (iosOverviewTrendChart) iosOverviewTrendChart.resize(); if (ddTrendChart) ddTrendChart.resize(); if (crossTrendChart) crossTrendChart.resize(); });
+  window.addEventListener('resize', () => {
+    if (chart) {
+      chart.resize();
+      clearTimeout(stChartResizeTimer);
+      stChartResizeTimer = setTimeout(() => updateChart(lastStChartData), 120);
+    }
+    if (iosTrendChart) iosTrendChart.resize();
+    if (iosOverviewTrendChart) iosOverviewTrendChart.resize();
+    if (ddTrendChart) ddTrendChart.resize();
+    if (crossTrendChart) crossTrendChart.resize();
+  });
 </script>
 </body>
 </html>
