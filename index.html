@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.14</title>
+  <title>ASO 数据中心 v2.2.15</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -155,6 +155,7 @@
     .action-btn.primary { background:#4299e1; color:#fff; }
     .action-btn.success { background:#c6f6d5; color:#22543d; }
     .action-btn.danger { background:#fed7d7; color:#9b2c2c; }
+    .action-btn:disabled { opacity:.48; cursor:not-allowed; }
     .storage-row { display:grid; grid-template-columns:220px 1fr auto; gap:12px; padding:12px 0; border-bottom:1px solid #edf2f7; align-items:center; }
     .storage-row:last-child { border-bottom:0; }
     .storage-key { font-weight:700; }
@@ -243,7 +244,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.14</span>
+      <span class="version-badge">v2.2.15</span>
     </header>
 
     <main class="page-wrap">
@@ -329,6 +330,7 @@
           <div class="ios-selection-actions">
             <button id="iosClearSelectionBtn" class="action-btn">清除勾选</button>
             <button id="iosClearCurrentBtn" class="action-btn danger">清空当前筛选数据</button>
+            <button id="iosDeleteTaskBtn" class="action-btn danger" disabled>删除当前任务</button>
             <span id="iosSelectionNote" class="ios-selection-note">点击关键词或勾选后，下方折线图会显示跨日期排名趋势。</span>
           </div>
         </div>
@@ -363,6 +365,10 @@
             <div class="filter-field"><label for="ddKeywordInput">结果关键词</label><input id="ddKeywordInput" class="text-input" placeholder="搜索关键词"></div>
           </div>
           <div class="summary-line" id="ddSummaryLine"></div>
+          <div class="ios-selection-actions">
+            <button id="ddDeleteTaskBtn" class="action-btn danger" disabled>删除当前任务</button>
+            <span class="ios-selection-note">需先选择具体 App、测试批次和国家；删除后该任务全部日期快照会从看板移除。</span>
+          </div>
         </div>
         <div class="panel ios-chart-panel" id="ddTrendPanel">
           <div class="panel-title"><h3 id="ddTrendTitle">关键词排名趋势</h3><button id="ddTrendClearBtn" class="action-btn hidden">清除曲线</button></div>
@@ -465,7 +471,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.14';
+  const DASHBOARD_VERSION = '2.2.15';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -2448,6 +2454,98 @@
     alert(`已清空当前筛选数据，共删除 ${removedRaw} 条原始记录。`);
   }
 
+  function iosTaskScopeReady(filters) {
+    return Boolean(filters?.app && filters?.batch && filters?.country);
+  }
+
+  function updateIosTaskDeleteButtons() {
+    const qimaiButton = document.getElementById('iosDeleteTaskBtn');
+    if (qimaiButton) {
+      const ready = iosTaskScopeReady(iosFilters);
+      qimaiButton.disabled = !ready;
+      qimaiButton.title = ready
+        ? `删除七麦任务：${iosFilters.app}｜${iosFilters.batch}｜${iosFilters.country}`
+        : '请先选择具体 App、测试批次和国家';
+    }
+    const ddButton = document.getElementById('ddDeleteTaskBtn');
+    if (ddButton) {
+      const ready = iosTaskScopeReady(ddFilters);
+      ddButton.disabled = !ready;
+      ddButton.title = ready
+        ? `删除点点任务：${ddFilters.app}｜${ddFilters.batch}｜${ddFilters.country}`
+        : '请先选择具体 App、测试批次和国家';
+    }
+  }
+
+  function deleteCurrentQimaiTask() {
+    if (!iosTaskScopeReady(iosFilters)) {
+      alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
+      return;
+    }
+    const { app, batch, country } = iosFilters;
+    const snapshots = getQimaiSnapshots();
+    const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
+    if (!matched.length) {
+      alert('当前 App / 批次 / 国家下没有可删除的七麦任务快照。');
+      return;
+    }
+    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
+    if (!confirm(`确定彻底删除当前七麦任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或点点数据。建议先导出全部 JSON。`)) return;
+
+    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
+    saveQimaiSnapshots(next);
+    selectedIosKeywords.clear();
+    saveIosSelection();
+    iosFilters.date = '';
+    iosFilters.source = '';
+    iosFilters.keyword = '';
+    const sourceInput = document.getElementById('iosSourceInput');
+    const keywordInput = document.getElementById('iosKeywordInput');
+    if (sourceInput) sourceInput.value = '';
+    if (keywordInput) keywordInput.value = '';
+    addSyncLog({ source:'qimai_ios', status:'success', message:`已删除七麦任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
+    renderIosDashboard();
+    renderCrossValidation();
+    renderOverview();
+    renderStorageSummary();
+    alert(`已删除七麦任务：${app}｜${batch}｜${country}。`);
+  }
+
+  function deleteCurrentDiandianTask() {
+    if (!iosTaskScopeReady(ddFilters)) {
+      alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
+      return;
+    }
+    const { app, batch, country } = ddFilters;
+    const snapshots = getDiandianSnapshots();
+    const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
+    if (!matched.length) {
+      alert('当前 App / 批次 / 国家下没有可删除的点点任务快照。');
+      return;
+    }
+    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
+    if (!confirm(`确定彻底删除当前点点任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或七麦数据。建议先导出全部 JSON。`)) return;
+
+    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
+    saveDiandianSnapshots(next);
+    ddSelectedTrendKey = '';
+    ddFilters.date = '';
+    ddFilters.source = '';
+    ddFilters.keyword = '';
+    const sourceInput = document.getElementById('ddSourceInput');
+    const keywordInput = document.getElementById('ddKeywordInput');
+    if (sourceInput) sourceInput.value = '';
+    if (keywordInput) keywordInput.value = '';
+    addSyncLog({ source:'diandian_ios', status:'success', message:`已删除点点任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
+    renderDiandianDashboard();
+    renderCrossValidation();
+    renderOverview();
+    renderStorageSummary();
+    alert(`已删除点点任务：${app}｜${batch}｜${country}。`);
+  }
+
   function sortIndexRows(rows, direction) {
     if (!direction) return rows;
     const factor = direction === 'asc' ? 1 : -1;
@@ -2467,6 +2565,7 @@
 
   function renderIosDashboard() {
     renderIosSelectors();
+    updateIosTaskDeleteButtons();
     document.querySelectorAll('[data-ios-category]').forEach(button => button.classList.toggle('active', button.dataset.iosCategory === iosCategory));
     const allSnapshots = getQimaiSnapshots();
     const rawRows = getFilteredQimaiRows();
@@ -3127,6 +3226,7 @@
 
   function renderDiandianDashboard() {
     renderDiandianSelectors();
+    updateIosTaskDeleteButtons();
     document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
     const rawRows = getFilteredDiandianRows();
     let rows = groupQimaiRowsByKeyword(rawRows);
@@ -3447,6 +3547,7 @@
     [['ddAppSelect','app'],['ddBatchSelect','batch'],['ddCountrySelect','country'],['ddDateSelect','date']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { ddFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){ddFilters.batch='';ddFilters.country='';ddFilters.date='';} if(key==='batch'){ddFilters.country='';ddFilters.date='';} if(key==='country')ddFilters.date=''; renderDiandianDashboard(); }));
     document.getElementById('ddSourceInput')?.addEventListener('input', event => { ddFilters.source=event.target.value; renderDiandianDashboard(); });
     document.getElementById('ddKeywordInput')?.addEventListener('input', event => { ddFilters.keyword=event.target.value; renderDiandianDashboard(); });
+    document.getElementById('ddDeleteTaskBtn')?.addEventListener('click', deleteCurrentDiandianTask);
     [['crossAppSelect','app'],['crossBatchSelect','batch'],['crossCountrySelect','country']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { crossFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){crossFilters.batch='';crossFilters.country='';} if(key==='batch')crossFilters.country=''; renderCrossValidation(); }));
     document.getElementById('crossKeywordInput')?.addEventListener('input', event => { crossFilters.keyword=event.target.value; renderCrossValidation(); });
     document.getElementById('crossTableBody')?.addEventListener('click', event => {
@@ -3486,6 +3587,7 @@
     document.getElementById('iosKeywordInput').addEventListener('input', event => { iosFilters.keyword = event.target.value; renderIosDashboard(); });
     document.getElementById('iosClearSelectionBtn').addEventListener('click', () => { selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); });
     document.getElementById('iosClearCurrentBtn').addEventListener('click', clearCurrentIosView);
+    document.getElementById('iosDeleteTaskBtn')?.addEventListener('click', deleteCurrentQimaiTask);
     document.getElementById('drawerCloseBtn').addEventListener('click', closeKeywordDrawer);
     document.getElementById('keywordDrawerMask').addEventListener('click', event => { if (event.target.id === 'keywordDrawerMask') closeKeywordDrawer(); });
     document.addEventListener('keydown', event => { if (event.key === 'Escape') closeKeywordDrawer(); });
