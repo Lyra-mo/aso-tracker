@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>ASO 数据中心 v2.2.15</title>
+  <title>ASO 数据中心 v2.2.16</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="48x48" href="./favicon-48x48.png">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
@@ -244,7 +244,7 @@
         <button class="nav-btn" data-page="crossSection">交叉验证</button>
         <button class="nav-btn" data-page="dataSection">数据管理</button>
       </nav>
-      <span class="version-badge">v2.2.15</span>
+      <span class="version-badge">v2.2.16</span>
     </header>
 
     <main class="page-wrap">
@@ -539,6 +539,19 @@
 
   function compactDate(value) {
     return toDateKey(value).replace(/\D/g, '');
+  }
+
+  // 统一前端日期展示格式：内部仍保留 YYYY-MM-DD，显示统一为 YYYY/MM/DD
+  function displayDate(value) {
+    const key = toDateKey(value);
+    if (!key) return '—';
+    return key.replace(/-/g, '/');
+  }
+
+  // 批次展示：T1-20260729 -> T1，日期单独展示
+  function displayBatch(value) {
+    const text = String(value || '');
+    return text.replace(/-\d{8}$/, '') || text;
   }
 
   function diffDays(later, earlier) {
@@ -1212,7 +1225,7 @@
       const note = getNote(record.App, record.Batch, record.Date);
       return `
         <div class="history-record">
-          <span class="history-date">${escapeHtml(record.Date)}</span>
+          <span class="history-date">${escapeHtml(displayDate(record.Date))}</span>
           <span class="history-rank">#${escapeHtml(record.Rank)}</span>
           ${stCheckpointBadge(record)}
           ${stCaptureMeta(record)}
@@ -2607,7 +2620,7 @@
         <td><input class="ios-checkbox ios-row-select" type="checkbox" data-row-index="${index}" ${selectedIosKeywords.has(entityKey) ? 'checked' : ''}></td>
         <td class="ios-keyword-main"><button class="keyword-link ios-keyword-trend ${selectedIosKeywords.has(entityKey) ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
         <td>${renderIosSourceChips(row.sourceKeywords)}</td>
-        <td class="ios-latest-date">${escapeHtml(row.latestDate || row.date || '—')}</td>
+        <td class="ios-latest-date">${escapeHtml(displayDate(row.latestDate || row.date || ''))}</td>
         <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(iosCategory === 'new_entry' ? '新进榜' : (row.rankChangeText || '—'))}</td>
         <td class="ios-latest-metric">${displayNumber(row.index)}</td>
         <td class="ios-history-cell">${renderIosHistoryChips(row.history, iosCategory, index)}</td>
@@ -2936,7 +2949,7 @@
     document.getElementById('metricOverviewSyncDaysNote').textContent = `${appCount} 个 App｜按数据日期去重`;
     document.getElementById('metricLastSync').textContent = formatDateTime(lastSync);
     document.getElementById('metricLastSyncNote').textContent = '插件同步或手动导入的最近时间';
-    document.getElementById('overviewLatestDate').textContent = latestDate ? `最新数据 ${latestDate}` : '暂无同步';
+    document.getElementById('overviewLatestDate').textContent = latestDate ? `最新数据 ${displayDate(latestDate)}` : '暂无同步';
     document.getElementById('overviewScopeNote').textContent = `当前范围：${scopeParts.join(' / ')}`;
     document.getElementById('latestSummaryScope').textContent = `${groups.length} 个 App / 批次`;
 
@@ -2944,7 +2957,7 @@
     document.getElementById('overviewChangeSummary').innerHTML = sources.map(source => {
       const sourceGroups=groups.filter(item=>item.source===source);
       const totals={ keywords:sourceGroups.reduce((s,i)=>s+i.keywordCount,0),up:sourceGroups.reduce((s,i)=>s+i.up,0),down:sourceGroups.reduce((s,i)=>s+i.down,0),newCount:sourceGroups.reduce((s,i)=>s+i.newCount,0) };
-      const rows=sourceGroups.length?sourceGroups.map((item,index)=>`<div class="overview-app-row" data-overview-index="${encode(`${source}|${item.app}|${item.batch}|${item.country}`)}"><div><div class="overview-app-name">${escapeHtml(item.app)}</div><div class="overview-app-meta">${escapeHtml(item.batch || '未命名批次')}</div></div><div class="overview-app-meta">${escapeHtml(item.country || '未标注国家')}</div><div class="overview-app-meta">同步 ${item.syncDays} 天<br>最新 ${escapeHtml(item.latestDate || '—')}</div><div class="overview-app-metrics"><span class="overview-mini-chip">关键词 ${item.keywordCount}</span><span class="overview-mini-chip up">上涨 ${item.up}</span><span class="overview-mini-chip down">下降 ${item.down}</span>${source==='st'?`<span class="overview-mini-chip">不变 ${item.flat}</span>${item.noDataDays?`<span class="overview-mini-chip">无排名 ${item.noDataDays}天</span>`:''}`:`<span class="overview-mini-chip new">新进榜 ${item.newCount}</span>${item.other?`<span class="overview-mini-chip">其他变动 ${item.other}</span>`:''}`}</div><button type="button" class="overview-open-btn" data-source="${source}" data-app="${encode(item.app)}" data-batch="${encode(item.batch)}" data-country="${encode(item.country||'')}">查看</button></div>`).join(''):`<div class="overview-empty">暂无${escapeHtml(overviewPlatformName(source))}数据</div>`;
+      const rows=sourceGroups.length?sourceGroups.map((item,index)=>`<div class="overview-app-row" data-overview-index="${encode(`${source}|${item.app}|${item.batch}|${item.country}`)}"><div><div class="overview-app-name">${escapeHtml(item.app)}</div><div class="overview-app-meta">${escapeHtml(item.batch || '未命名批次')}</div></div><div class="overview-app-meta">${escapeHtml(item.country || '未标注国家')}</div><div class="overview-app-meta">同步 ${item.syncDays} 天<br>最新 ${escapeHtml(displayDate(item.latestDate || ''))}</div><div class="overview-app-metrics"><span class="overview-mini-chip">关键词 ${item.keywordCount}</span><span class="overview-mini-chip up">上涨 ${item.up}</span><span class="overview-mini-chip down">下降 ${item.down}</span>${source==='st'?`<span class="overview-mini-chip">不变 ${item.flat}</span>${item.noDataDays?`<span class="overview-mini-chip">无排名 ${item.noDataDays}天</span>`:''}`:`<span class="overview-mini-chip new">新进榜 ${item.newCount}</span>${item.other?`<span class="overview-mini-chip">其他变动 ${item.other}</span>`:''}`}</div><button type="button" class="overview-open-btn" data-source="${source}" data-app="${encode(item.app)}" data-batch="${encode(item.batch)}" data-country="${encode(item.country||'')}">查看</button></div>`).join(''):`<div class="overview-empty">暂无${escapeHtml(overviewPlatformName(source))}数据</div>`;
       return `<div class="overview-platform-block"><div class="overview-platform-header"><div class="overview-platform-title">${escapeHtml(overviewPlatformName(source))}</div><div class="overview-platform-total">关键词 ${totals.keywords}｜上涨 ${totals.up}｜下降 ${totals.down}${source==='st'?'':`｜新进榜 ${totals.newCount}`}</div></div><div class="overview-app-list">${rows}</div></div>`;
     }).join('');
 
@@ -3250,7 +3263,7 @@
     document.getElementById('ddTableBody').innerHTML = rows.slice(0,1000).map((row,index) => `<tr>
       <td class="ios-keyword-main"><button class="keyword-link dd-keyword-trend ${diandianTrendEntityKey(row) === ddSelectedTrendKey ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
       <td>${renderIosSourceChips(row.sourceKeywords)}</td>
-      <td class="ios-latest-date">${escapeHtml(row.latestDate || row.date || '—')}</td>
+      <td class="ios-latest-date">${escapeHtml(displayDate(row.latestDate || row.date || ''))}</td>
       <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(ddCategory==='new_entry'?'新进榜':(row.rankChangeText||'—'))}</td>
       <td class="ios-latest-metric">${displayNumber(row.index)}</td>
       <td>${displayNumber(row.rank)}</td>
