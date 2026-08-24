@@ -1125,15 +1125,26 @@
   function buildAdaptiveDateAxis(dates, options = {}) {
     const values = Array.isArray(dates) ? dates : [];
     const forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
-    const spanDays = values.length;
-    // 日期展示规则：
-    // <=14天：全部展示
-    // 15-31天：按周展示
-    // >31天：沿用自适应稀疏
-    let step = chooseAdaptiveDateLabelStep(values.length, options.chartWidth);
-    if (spanDays <= 14) step = 1;
-    else if (spanDays <= 31) step = 7;
-    const lastIndex = Math.max(0, values.length - 1);
+    const total = values.length;
+
+    // 日期轴展示策略：
+    // <=14天：显示每天
+    // 15~30天：每3天显示
+    // 31~60天：每7天显示
+    // >60天：根据窗口宽度进一步稀疏
+    let step = 1;
+    if (total <= 14) {
+      step = 1;
+    } else if (total <= 30) {
+      step = 3;
+    } else if (total <= 60) {
+      step = 7;
+    } else {
+      step = chooseAdaptiveDateLabelStep(total, options.chartWidth);
+    }
+
+    const lastIndex = Math.max(0, total - 1);
+
     const shouldShow = (index, value) => {
       if (index === 0 || index === lastIndex) return true;
       if (forcedDates.has(toDateKey(value))) return true;
