@@ -1151,9 +1151,9 @@
       axisLabel: {
         // ECharts 5 在部分场景下对 interval 函数优化后仍可能显示全部标签，
         // 这里改为 formatter 主动控制显示，确保按日期跨度稀疏。
-        interval: 0,
+        interval: (index, value) => shouldShow(index, value),
         formatter: (value, index) => shouldShow(index, value) ? formatAdaptiveDateLabel(value, index, values) : '',
-        hideOverlap: true,
+        hideOverlap: false,
         showMinLabel: true,
         showMaxLabel: true,
         rotate: 0,
