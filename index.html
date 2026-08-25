@@ -1119,20 +1119,24 @@
     const isEdge = index === 0 || index === dates.length - 1;
     const previous = index > 0 ? toDateKey(dates[index - 1]) : '';
     const yearChanged = previous && previous.slice(0, 4) !== key.slice(0, 4);
-    return isEdge || yearChanged ? key : key.slice(5);
+    // 横轴缩短显示：日常趋势图不需要重复显示年份
+    return isEdge || yearChanged ? key.slice(5) : key.slice(5);
   }
 
   function buildAdaptiveDateAxis(dates, options = {}) {
     const values = Array.isArray(dates) ? dates : [];
     const forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
-    const spanDays = values.length;
+    // 使用真实日期跨度，而不是数据点数量判断展示密度
+    const spanDays = values.length > 1 ? diffDays(values[values.length - 1], values[0]) + 1 : values.length;
     // 日期展示规则：
-    // <=14天：全部展示
-    // 15-31天：按周展示
-    // >31天：沿用自适应稀疏
-    let step = chooseAdaptiveDateLabelStep(values.length, options.chartWidth);
-    if (spanDays <= 14) step = 1;
-    else if (spanDays <= 31) step = 7;
+    // <=15天：每天展示
+    // 16-45天：每3天展示
+    // 46-90天：每7天展示
+    // >90天：根据窗口宽度自动稀疏
+    let step = chooseAdaptiveDateLabelStep(spanDays, options.chartWidth);
+    if (spanDays <= 15) step = 1;
+    else if (spanDays <= 45) step = 3;
+    else if (spanDays <= 90) step = 7;
     const lastIndex = Math.max(0, values.length - 1);
     const shouldShow = (index, value) => {
       if (index === 0 || index === lastIndex) return true;
