@@ -1149,15 +1149,17 @@
       boundaryGap: options.boundaryGap === undefined ? false : Boolean(options.boundaryGap),
       data: values,
       axisLabel: {
-        interval: shouldShow,
-        formatter: (value, index) => formatAdaptiveDateLabel(value, index, values),
+        // ECharts 5 在部分场景下对 interval 函数优化后仍可能显示全部标签，
+        // 这里改为 formatter 主动控制显示，确保按日期跨度稀疏。
+        interval: 0,
+        formatter: (value, index) => shouldShow(index, value) ? formatAdaptiveDateLabel(value, index, values) : '',
         hideOverlap: true,
         showMinLabel: true,
         showMaxLabel: true,
         rotate: 0,
         margin: 12
       },
-      axisTick: { alignWithLabel: true, interval: shouldShow },
+      axisTick: { alignWithLabel: true, interval: (index, value) => shouldShow(index, value) },
       axisPointer: {
         label: { formatter: params => toDateKey(params.value) || String(params.value || '') }
       }
