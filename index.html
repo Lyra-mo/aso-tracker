@@ -1518,6 +1518,27 @@
     });
 
     const series = Object.values(seriesMap);
+
+    // ST 趋势图：生成独立展示日期轴，避免 ECharts category 轴保留全部日期标签
+    // series 内部仍使用完整 dates 索引，不影响 tooltip 和排名数据。
+    const displayDates = dates.filter((date, index) => {
+      const spanDays = dates.length > 1 ? diffDays(dates[dates.length - 1], dates[0]) + 1 : dates.length;
+      let step = 1;
+      if (spanDays <= 15) step = 1;
+      else if (spanDays <= 45) step = 3;
+      else if (spanDays <= 90) step = 7;
+      else step = Math.ceil(spanDays / 12);
+      return index === 0 || index === dates.length - 1 || index % step === 0;
+    });
+
+    const originalSeries = series.map(item => ({
+      ...item,
+      data: displayDates.map(date => {
+        const originalIndex = dates.indexOf(date);
+        return originalIndex >= 0 ? item.data[originalIndex] : null;
+      })
+    }));
+
     if (notes.length) {
       series.push({
         name: '备注',
@@ -1547,7 +1568,7 @@
       ...notes.map(item => item.Date),
       ...data.filter(item => CHECKPOINTS.includes(Number(item.Checkpoint))).map(item => item.Date)
     ];
-    const xAxis = buildAdaptiveDateAxis(dates, {
+    const xAxis = buildAdaptiveDateAxis(displayDates, {
       chartWidth: chart.getWidth(),
       forcedDates,
       boundaryGap: false
@@ -1568,7 +1589,7 @@
       grid: { left: 55, right: 35, top: 55, bottom: 72, containLabel: true },
       xAxis,
       yAxis: { type: 'value', inverse: true, nameLocation: 'start', name: '排名', min: 1, max: axisMax },
-      series
+      series: originalSeries.concat(notes.length ? [series[series.length - 1]] : [])
     }, true);
   }
 
@@ -2455,7 +2476,7 @@
       grid:{ left:52, right:24, top:54, bottom:48, containLabel:true },
       xAxis:{ ...buildAdaptiveDateAxis(allDates, { chartWidth:document.getElementById('iosOverviewTrendChart')?.clientWidth || 1200, boundaryGap:false }), name:'抓取日期' },
       yAxis:{ type:'value', inverse:true, nameLocation: 'start', min:1, name:'排名（越小越好）' },
-      series
+      series: originalSeries.concat(notes.length ? [series[series.length - 1]] : [])
     }, true);
     setTimeout(() => iosOverviewTrendChart.resize(), 30);
   }
