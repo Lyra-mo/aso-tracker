@@ -1,0 +1,3394 @@
+// v2.3 split entry
+// Original business logic is preserved here during first-stage refactor.
+// Next step can split into modules: storage/utils/st/ios/dashboard.
+
+
+  const MASTER_KEY = 'aso_master_data';
+  const BACKUP_KEY = 'aso_master_data_backup_before_excel_v17';
+  const MIGRATION_KEY = 'aso_batch_dashboard_migrated_v17';
+  const NOTES_KEY = 'aso_notes_v110';
+  const CHECKPOINTS = [0, 3, 7, 14, 28];
+  const QIMAI_KEY = 'aso_ios_qimai_snapshots_v200';
+  const DIANDIAN_KEY = 'aso_ios_diandian_snapshots_v220';
+  const SYNC_LOG_KEY = 'aso_sync_logs_v200';
+  const ST_STATUS_KEY = 'aso_st_processing_status_v227';
+  const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
+  const MAX_IOS_TREND_SERIES = 8;
+  const IOS_MIN_INDEX = 4605;
+  const DASHBOARD_VERSION = '2.2.15';
+
+  const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
+  let iosTrendChart = null;
+  let iosOverviewTrendChart = null;
+  let ddTrendChart = null;
+  let ddSelectedTrendKey = '';
+  let ddCurrentRows = [];
+  let crossTrendChart = null;
+  let crossSelectedKey = '';
+  let crossCurrentRows = [];
+  let activePage = localStorage.getItem('aso_active_page_v200') || 'overviewSection';
+  let iosCategory = localStorage.getItem('aso_ios_category_v200') || 'rank_changed';
+  let ddCategory = localStorage.getItem('aso_dd_category_v220') || 'rank_changed';
+  let iosIndexSort = localStorage.getItem('aso_ios_index_sort_v225') || '';
+  let ddIndexSort = localStorage.getItem('aso_dd_index_sort_v225') || '';
+  const iosFilters = {
+    app: localStorage.getItem('aso_ios_filter_app_v200') || '',
+    batch: localStorage.getItem('aso_ios_filter_batch_v200') || '',
+    country: localStorage.getItem('aso_ios_filter_country_v200') || '',
+    date: localStorage.getItem('aso_ios_filter_date_v200') || '',
+    source: '',
+    keyword: ''
+  };
+  const ddFilters = { app:'', batch:'', country:'', date:'', source:'', keyword:'' };
+  const crossFilters = { app:'', batch:'', country:'', keyword:'' };
+  const overviewFilters = {
+    platform: localStorage.getItem('aso_overview_platform_v222') || 'all',
+    app: localStorage.getItem('aso_overview_app_v222') || '',
+    batch: localStorage.getItem('aso_overview_batch_v222') || '',
+    country: localStorage.getItem('aso_overview_country_v222') || '',
+    date: localStorage.getItem('aso_overview_date_v222') || ''
+  };
+  let selectedAppGroup = localStorage.getItem('selected_app_group') || '';
+  let selectedApps = JSON.parse(localStorage.getItem('selected_apps') || '[]');
+  let selectedBatches = JSON.parse(localStorage.getItem('selected_batches') || '[]');
+  let selectedItems = JSON.parse(localStorage.getItem('selected_items_v16') || '[]');
+  let stNodeIntervalDays = Number(localStorage.getItem('st_node_interval_days') || 7);
+  if (![0, 7, 14].includes(stNodeIntervalDays)) stNodeIntervalDays = 7;
+  let selectedIosKeywords = new Set(safeJsonParse(localStorage.getItem(IOS_SELECTION_KEY) || '[]', []));
+  let lastStChartData = [];
+  let stChartResizeTimer = null;
+
+  function parseDate(value) {
+    const match = String(value || '').match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function toDateKey(value) {
+    const date = value instanceof Date ? value : parseDate(value);
+    if (!date) return String(value || '');
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function addDateDays(value, days) {
+    const date = value instanceof Date ? new Date(value) : parseDate(value);
+    if (!date) return '';
+    date.setDate(date.getDate() + Number(days || 0));
+    return toDateKey(date);
+  }
+
+  function compactDate(value) {
+    return toDateKey(value).replace(/\D/g, '');
+  }
+
+  // 统一前端日期展示格式：内部仍保留 YYYY-MM-DD，显示统一为 YYYY/MM/DD
+  function displayDate(value) {
+    const key = toDateKey(value);
+    if (!key) return '—';
+    return key.replace(/-/g, '/');
+  }
+
+  // 批次展示：T1-20260729 -> T1，日期单独展示
+  function displayBatch(value) {
+    const text = String(value || '');
+    return text.replace(/-\d{8}$/, '') || text;
+  }
+
+  function diffDays(later, earlier) {
+    const a = parseDate(later);
+    const b = parseDate(earlier);
+    if (!a || !b) return 0;
+    return Math.round((new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(b.getFullYear(), b.getMonth(), b.getDate())) / 86400000);
+  }
+
+  function inferCheckpoint(date, firstDate) {
+    const day = diffDays(date, firstDate);
+    return CHECKPOINTS.includes(day) ? day : 0;
+  }
+
+  // ST 节点排名的归属日期使用计划节点日期，实际执行日期仅用于历史说明。
+  // 例如：D3 计划 7/26、7/27 才实抓，主表/图表仍显示 7/26；历史明细显示“实抓 7/27”。
+  // v2.1.3 只处理 completed_backfill，旧插件传入 completed_late 时仍会错误显示实抓日期。
+  function resolveStDataDate(item = {}) {
+    const scheduledDate = toDateKey(item.ScheduledDate || item.scheduledDate || '');
+    const rawDataDate = toDateKey(item.DataDate || item.dataDate || item.Date || item.date || '');
+    const captureStatus = String(item.CaptureStatus || item.captureStatus || '').trim();
+    const runMode = String(item.RunMode || item.runMode || '').trim();
+    const checkpointValue = Number(item.Checkpoint ?? item.checkpoint);
+    const isCheckpoint = CHECKPOINTS.includes(checkpointValue);
+
+    // 页面数据尚未更新时，保留页面真实日期，避免把旧数据伪装成目标节点数据。
+    if (captureStatus === 'data_waiting') return rawDataDate;
+
+    // 手动快照和手动区间日数据不属于固定节点，继续使用页面真实数据日期。
+    if (['manual_snapshot', 'manual_range'].includes(runMode) || ['manual_snapshot', 'completed_range'].includes(captureStatus)) return rawDataDate;
+
+    // 固定节点（D0/D3/D7/D14/D28）一律按计划日期归档。
+    // completed_late 在此场景表示“晚一天执行”，不是排名属于晚一天。
+    if (scheduledDate && isCheckpoint) return scheduledDate;
+
+    // 兼容旧记录：有明确计划日期且被标记为补抓/延迟抓取时，也按计划日期展示。
+    if (scheduledDate && ['completed_backfill', 'completed_late'].includes(captureStatus)) return scheduledDate;
+
+    return rawDataDate;
+  }
+
+  function normalizeRecords(records) {
+    const list = Array.isArray(records) ? records : [];
+    const earliestByApp = {};
+
+    list.forEach(item => {
+      const app = String(item.App || '未命名 App').trim();
+      const dataDate = resolveStDataDate(item);
+      if (!dataDate) return;
+      if (!earliestByApp[app] || parseDate(dataDate) < parseDate(earliestByApp[app])) earliestByApp[app] = dataDate;
+    });
+
+    const provisional = list.map(item => {
+      const app = String(item.App || '未命名 App').trim();
+      const dataDate = resolveStDataDate(item);
+      const defaultFirstDate = earliestByApp[app] || dataDate;
+      const batch = String(item.Batch || item.batchName || `T1-${compactDate(defaultFirstDate)}`).trim();
+      const runModeValue = String(item.RunMode || item.runMode || '').trim();
+      const explicitCheckpoint = runModeValue === 'manual_range' ? null : (CHECKPOINTS.includes(Number(item.Checkpoint)) ? Number(item.Checkpoint) : null);
+      const delayValue = Number(item.DelayDays ?? item.delayDays);
+
+      return {
+        ...item,
+        App: app,
+        Batch: batch,
+        Keyword: String(item.Keyword || '').trim(),
+        Rank: String(item.Rank || '').trim(),
+        Date: dataDate,
+        DataDate: dataDate,
+        ScheduledDate: (item.ScheduledDate || item.scheduledDate) ? toDateKey(item.ScheduledDate || item.scheduledDate) : '',
+        CapturedAt: item.CapturedAt || item.capturedAt || '',
+        DelayDays: Number.isFinite(delayValue) ? delayValue : null,
+        CaptureStatus: String(item.CaptureStatus || item.captureStatus || '').trim(),
+        RunMode: String(item.RunMode || item.runMode || '').trim(),
+        _ExplicitCheckpoint: explicitCheckpoint
+      };
+    }).filter(item => item.Keyword && item.Date && /^\d+$/.test(item.Rank) && Number(item.Rank) > 0);
+
+    const earliestByAppBatch = {};
+    provisional.forEach(item => {
+      const key = `${item.App}__${item.Batch}`;
+      if (!earliestByAppBatch[key] || parseDate(item.Date) < parseDate(earliestByAppBatch[key])) earliestByAppBatch[key] = item.Date;
+    });
+
+    return provisional.map(item => {
+      const firstDate = earliestByAppBatch[`${item.App}__${item.Batch}`] || item.Date;
+      const actualOffset = diffDays(item.Date, firstDate);
+      const checkpoint = item._ExplicitCheckpoint !== null
+        ? item._ExplicitCheckpoint
+        : (CHECKPOINTS.includes(actualOffset) ? actualOffset : null);
+      const scheduledDate = item.ScheduledDate || (checkpoint !== null ? addDateDays(firstDate, checkpoint) : item.Date);
+      const capturedDate = item.CapturedAt ? toDateKey(item.CapturedAt) : '';
+      const derivedDelay = capturedDate && scheduledDate ? Math.max(0, diffDays(capturedDate, scheduledDate)) : 0;
+      const delayDays = item.DelayDays === null ? derivedDelay : item.DelayDays;
+      let captureStatus = item.CaptureStatus;
+      if (item.Date && scheduledDate && parseDate(item.Date) < parseDate(scheduledDate)) {
+        captureStatus = 'data_waiting';
+      } else if (captureStatus === 'completed_late' && item.Date === scheduledDate && delayDays > 0) {
+        // 旧插件把“晚一天执行”记为 completed_late；归档日期校正后应显示为补抓。
+        captureStatus = 'completed_backfill';
+      } else if (!captureStatus) {
+        if (!item.CapturedAt && !item.ScheduledDate) captureStatus = 'legacy';
+        else if (item.RunMode === 'manual_snapshot') captureStatus = 'manual_snapshot';
+        else if (item.Date === scheduledDate && delayDays > 0) captureStatus = 'completed_backfill';
+        else if (item.Date !== scheduledDate) captureStatus = 'completed_late';
+        else captureStatus = 'completed';
+      }
+
+      const normalized = {
+        ...item,
+        ScheduledDate: scheduledDate,
+        DataDate: item.Date,
+        DelayDays: delayDays,
+        CaptureStatus: captureStatus,
+        DayOffset: checkpoint !== null ? checkpoint : actualOffset,
+        Checkpoint: checkpoint
+      };
+      delete normalized._ExplicitCheckpoint;
+      return normalized;
+    });
+  }
+
+  function recordKey(item) {
+    return `${item.App}__${item.Batch}__${item.Keyword}__${item.Date}__${item.Checkpoint ?? 'temp'}__${item.ScheduledDate || item.Date}`;
+  }
+
+  function itemKey(item) {
+    return `${item.App}__${item.RawBatch || item.Batch}__${item.Keyword}`;
+  }
+
+  function saveMasterData(records) {
+    localStorage.setItem(MASTER_KEY, JSON.stringify(normalizeRecords(records)));
+  }
+
+  function migrateExistingData() {
+    const raw = localStorage.getItem(MASTER_KEY) || '[]';
+
+    if (!localStorage.getItem(BACKUP_KEY)) {
+      localStorage.setItem(BACKUP_KEY, raw);
+    }
+
+    if (localStorage.getItem(MIGRATION_KEY) === '1') return;
+
+    let records = [];
+    try {
+      records = JSON.parse(raw);
+    } catch (error) {
+      console.error('旧数据解析失败，已保留原始备份：', error);
+      return;
+    }
+
+    const inferredStatuses = buildZeroRankStatusRecords(records);
+    if (inferredStatuses.length) saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
+    saveMasterData(records);
+    localStorage.setItem(MIGRATION_KEY, '1');
+  }
+
+  function rawStRankNumber(item = {}) {
+    const raw = String(item.Rank ?? item.rank ?? '').replace(/,/g, '').trim();
+    if (!raw) return null;
+    const match = raw.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const value = Number(match[0]);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  // ST 有时会把“页面尚无可用排名”返回为 Rank=0。
+  // 0 不是第 0 名：按无排名日期保存状态，并从排名记录中移除。
+  function buildZeroRankStatusRecords(records) {
+    const groups = new Map();
+    (Array.isArray(records) ? records : []).forEach(item => {
+      const date = resolveStDataDate(item);
+      if (!date) return;
+      const app = String(item.App || item.app || '未命名 App').trim();
+      const batch = String(item.Batch || item.batch || item.batchName || `T1-${compactDate(date)}`).trim();
+      const country = String(item.Country || item.country || '').trim().toUpperCase();
+      const key = [app, batch, country, date].join('|');
+      if (!groups.has(key)) groups.set(key, { app, batch, country, date, hasPositive:false, zeroKeywords:new Set(), capturedAt:'' });
+      const group = groups.get(key);
+      const rank = rawStRankNumber(item);
+      if (Number.isFinite(rank) && rank > 0) group.hasPositive = true;
+      if (rank === 0) group.zeroKeywords.add(String(item.Keyword || item.keyword || '').trim());
+      const capturedAt = item.CapturedAt || item.capturedAt || '';
+      if (String(capturedAt) > String(group.capturedAt)) group.capturedAt = capturedAt;
+    });
+
+    return [...groups.values()]
+      .filter(group => group.zeroKeywords.size > 0 && !group.hasPositive)
+      .map(group => ({
+        app:group.app,
+        batch:group.batch,
+        country:group.country,
+        date:group.date,
+        status:'completed_no_data',
+        capturedAt:group.capturedAt || new Date().toISOString(),
+        reason:'ST 返回 Rank=0，已按无排名日期留空处理。',
+        keywordCount:group.zeroKeywords.size
+      }));
+  }
+
+  function mergeIncomingData(newData) {
+    const inferredStatuses = buildZeroRankStatusRecords(newData);
+    if (inferredStatuses.length) {
+      saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
+    }
+    const masterData = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+    const incoming = normalizeRecords(newData);
+    const map = new Map(masterData.map(item => [recordKey(item), item]));
+    incoming.forEach(item => map.set(recordKey(item), item));
+    saveMasterData(Array.from(map.values()));
+    return inferredStatuses.length;
+  }
+
+  // 一次性兼容已经存入看板的旧 Rank=0 记录。
+  function repairLegacyZeroRankRecords() {
+    const raw = safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []);
+    if (!Array.isArray(raw) || !raw.some(item => rawStRankNumber(item) === 0)) return 0;
+    const inferredStatuses = buildZeroRankStatusRecords(raw);
+    if (inferredStatuses.length) saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
+    saveMasterData(raw); // normalizeRecords 会自动剔除 Rank=0。
+    return inferredStatuses.length;
+  }
+
+  function encode(value) {
+    return encodeURIComponent(String(value || ''));
+  }
+
+  function decode(value) {
+    return decodeURIComponent(value || '');
+  }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function noteKey(app, batch, date) {
+    return `${String(app || '').trim()}__${String(batch || '').trim()}__${toDateKey(date)}`;
+  }
+
+  function getNotesMap() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+      console.error('备注数据解析失败：', error);
+      return {};
+    }
+  }
+
+  function saveNotesMap(notes) {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(notes || {}));
+  }
+
+  function getNote(app, batch, date) {
+    return getNotesMap()[noteKey(app, batch, date)] || null;
+  }
+
+  function getNotesForBatch(app, batch, allowedDates = null) {
+    const dateSet = allowedDates ? new Set(allowedDates.map(toDateKey)) : null;
+    return Object.values(getNotesMap())
+      .filter(note => note.App === app && note.Batch === batch && (!dateSet || dateSet.has(toDateKey(note.Date))))
+      .sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+  }
+
+  function editNote(app, batch, date) {
+    const notes = getNotesMap();
+    const key = noteKey(app, batch, date);
+    const current = notes[key]?.Text || '';
+    const input = prompt(`为【${app}｜${batch}】在 ${toDateKey(date)} 添加备注：`, current);
+    if (input === null) return;
+
+    const text = input.trim();
+    if (!text) {
+      if (current && confirm('备注内容为空，是否删除原备注？')) {
+        delete notes[key];
+        saveNotesMap(notes);
+        renderDashboard();
+      }
+      return;
+    }
+
+    notes[key] = {
+      App: app,
+      Batch: batch,
+      Date: toDateKey(date),
+      Text: text,
+      UpdatedAt: new Date().toISOString()
+    };
+    saveNotesMap(notes);
+    renderDashboard();
+  }
+
+  function chooseNoteDate(app, batch, defaultDate) {
+    const suggested = toDateKey(defaultDate || new Date());
+    const selected = prompt(`请输入备注日期（YYYY-MM-DD）：`, suggested);
+    if (selected === null) return;
+    const date = toDateKey(String(selected).trim());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseDate(date)) {
+      alert('日期格式不正确，请输入 YYYY-MM-DD，例如 2026-07-29。');
+      return;
+    }
+    editNote(app, batch, date);
+  }
+
+  function deleteNote(app, batch, date) {
+    if (!confirm(`确定删除【${app}｜${batch}】在 ${toDateKey(date)} 的备注吗？`)) return;
+    const notes = getNotesMap();
+    delete notes[noteKey(app, batch, date)];
+    saveNotesMap(notes);
+    renderDashboard();
+  }
+
+  function mergeIncomingNotes(incomingNotes) {
+    if (!Array.isArray(incomingNotes)) return;
+    const notes = getNotesMap();
+    incomingNotes.forEach(note => {
+      if (!note || !note.App || !note.Batch || !note.Date || !String(note.Text || '').trim()) return;
+      notes[noteKey(note.App, note.Batch, note.Date)] = {
+        App: String(note.App).trim(),
+        Batch: String(note.Batch).trim(),
+        Date: toDateKey(note.Date),
+        Text: String(note.Text).trim(),
+        UpdatedAt: note.UpdatedAt || new Date().toISOString()
+      };
+    });
+    saveNotesMap(notes);
+  }
+
+  function normalizeStStatusRecord(record = {}) {
+    const app = String(record.app || record.App || '').trim();
+    const batch = String(record.batch || record.Batch || '').trim();
+    const date = toDateKey(record.date || record.dataDate || record.scheduledDate || record.Date || '');
+    if (!app || !batch || !date) return null;
+    return {
+      app,
+      batch,
+      country:String(record.country || record.Country || '').trim().toUpperCase(),
+      date,
+      status:String(record.status || record.captureStatus || 'completed').trim(),
+      capturedAt:record.capturedAt || record.CapturedAt || new Date().toISOString(),
+      reason:String(record.reason || record.message || record.lastError || '').trim(),
+      keywordCount:Number.isFinite(Number(record.keywordCount)) ? Number(record.keywordCount) : null
+    };
+  }
+
+  function stStatusKey(record) {
+    return [record.app, record.batch, record.country, record.date].map(value => String(value || '').trim().toLowerCase()).join('|');
+  }
+
+  function getStProcessingStatuses() {
+    const parsed = safeJsonParse(localStorage.getItem(ST_STATUS_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeStStatusRecord).filter(Boolean) : [];
+  }
+
+  function saveStProcessingStatuses(records) {
+    const map = new Map();
+    (records || []).map(normalizeStStatusRecord).filter(Boolean).forEach(record => {
+      const key = stStatusKey(record);
+      const current = map.get(key);
+      if (!current || String(record.capturedAt || '') >= String(current.capturedAt || '')) map.set(key, record);
+    });
+    const sorted = [...map.values()].sort((a,b)=>parseDate(b.date)-parseDate(a.date) || String(b.capturedAt||'').localeCompare(String(a.capturedAt||'')));
+    localStorage.setItem(ST_STATUS_KEY, JSON.stringify(sorted));
+  }
+
+  function mergeStStatusPayload(payload = {}) {
+    const incoming = [];
+    if (Array.isArray(payload.statusRecords)) incoming.push(...payload.statusRecords);
+    if (payload.statusRecord) incoming.push(payload.statusRecord);
+    if (payload.stStatus) incoming.push(payload.stStatus);
+    const normalized = incoming.map(normalizeStStatusRecord).filter(Boolean);
+    if (!normalized.length) return 0;
+    saveStProcessingStatuses([...getStProcessingStatuses(), ...normalized]);
+    return normalized.length;
+  }
+
+  function receiveUrlData() {
+    const params = new URLSearchParams(window.location.search);
+    const encodedData = params.get('data');
+    const encodedQimai = params.get('qimai');
+    const source = params.get('source') || '';
+    let received = false;
+
+    try {
+      if (encodedQimai) {
+        mergeQimaiPayload(JSON.parse(decodeURIComponent(encodedQimai)), 'plugin_url');
+        received = true;
+      }
+
+      if (encodedData) {
+        const payload = JSON.parse(decodeURIComponent(encodedData));
+        const looksLikeDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload?.diandianState);
+        const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' || Boolean(payload?.qimaiState);
+        if (looksLikeDiandian) mergeDiandianPayload(payload, 'plugin_url');
+        else if (looksLikeQimai || payload?.snapshot || payload?.snapshots || payload?.changedResults || payload?.newEntryResults) mergeQimaiPayload(payload, 'plugin_url');
+        else mergeIncomingData(payload);
+        received = true;
+      }
+
+      if (received) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        addSyncLog({ source: source || (encodedQimai ? 'qimai_ios' : 'sensortower'), status: 'success', message: '已接收插件同步数据。' });
+      }
+    } catch (error) {
+      console.error('数据解析失败：', error);
+      addSyncLog({ source: source || 'unknown', status: 'failed', message: error.message || String(error) });
+      alert('看板收到数据，但解析失败。插件本地备份仍然保留。');
+    }
+  }
+
+  function getAppGroup(appName) {
+    const app = String(appName || '').trim();
+    if (!app) return '其他';
+    return app.split(/\s+/)[0] || '其他';
+  }
+
+  function applyGroupFilter(records) {
+    return selectedAppGroup
+      ? records.filter(item => getAppGroup(item.App) === selectedAppGroup)
+      : records;
+  }
+
+  function persistStFilterState() {
+    if (selectedAppGroup) localStorage.setItem('selected_app_group', selectedAppGroup);
+    else localStorage.removeItem('selected_app_group');
+    localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+  }
+
+  function renderSelectors(data) {
+    const allApps = [...new Set(data.map(item => String(item.App || '').trim()).filter(Boolean))].sort();
+    const allGroups = [...new Set(allApps.map(getAppGroup))].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    // 先验证现有选择，再按“明确 App > 分组 > 全部”的顺序确定范围。
+    // 这样总览跳转、手动切换分组和刷新页面都不会混用上一次的 App/批次。
+    let exactApp = selectedApps.length === 1 && allApps.includes(selectedApps[0]) ? selectedApps[0] : '';
+    if (exactApp) {
+      selectedAppGroup = getAppGroup(exactApp);
+    } else {
+      selectedApps = [];
+      if (selectedAppGroup && !allGroups.includes(selectedAppGroup)) selectedAppGroup = '';
+    }
+
+    const appsInGroup = selectedAppGroup
+      ? allApps.filter(app => getAppGroup(app) === selectedAppGroup)
+      : allApps;
+
+    if (exactApp && !appsInGroup.includes(exactApp)) {
+      exactApp = '';
+      selectedApps = [];
+    } else if (exactApp) {
+      selectedApps = [exactApp];
+    }
+
+    const groupSelect = document.getElementById('appGroupSelect');
+    groupSelect.innerHTML = [
+      '<option value="">全部分组</option>',
+      ...allGroups.map(group => `<option value="${encode(group)}">${escapeHtml(group)}</option>`)
+    ].join('');
+    groupSelect.value = selectedAppGroup ? encode(selectedAppGroup) : '';
+
+    const appSelect = document.getElementById('appSelect');
+    const allAppsLabel = selectedAppGroup ? `全部 ${selectedAppGroup} 分组 App` : '全部 App';
+    appSelect.innerHTML = [
+      `<option value="">${escapeHtml(allAppsLabel)}</option>`,
+      ...appsInGroup.map(app => `<option value="${encode(app)}">${escapeHtml(app)}</option>`)
+    ].join('');
+    appSelect.value = selectedApps[0] ? encode(selectedApps[0]) : '';
+    appSelect.disabled = appsInGroup.length === 0;
+
+    // 精确 App 选择优先于分组，避免 01 LG 与 01 screen mirror 共用批次时串数据。
+    let appFiltered = selectedApps.length
+      ? data.filter(item => item.App === selectedApps[0])
+      : (selectedAppGroup ? data.filter(item => getAppGroup(item.App) === selectedAppGroup) : data);
+
+    const allBatches = [...new Set(appFiltered.map(item => item.Batch).filter(Boolean))].sort();
+    selectedBatches = selectedBatches.filter(batch => allBatches.includes(batch));
+    persistStFilterState();
+
+    const batchSelector = document.getElementById('batchSelector');
+    batchSelector.innerHTML = allBatches.map(batch => `
+      <button class="selector-btn batch-btn ${selectedBatches.includes(batch) ? 'active' : ''}" data-value="${encode(batch)}">${escapeHtml(batch)}</button>
+    `).join('') || '<span class="hint">暂无批次</span>';
+
+    document.querySelectorAll('.batch-btn').forEach(button => {
+      button.addEventListener('click', () => toggleBatch(decode(button.dataset.value)));
+    });
+  }
+
+  function stCheckpointBadge(record) {
+    if (record.RunMode === 'manual_range' || record.CaptureStatus === 'completed_range') return '<span class="checkpoint">日数据</span>';
+    if (record.CaptureStatus === 'manual_snapshot') return '<span class="checkpoint">手动</span>';
+    const checkpointText = record.Checkpoint === null ? `D${record.DayOffset}·临时` : `D${record.Checkpoint}`;
+    if (record.CaptureStatus === 'completed_backfill') return `<span class="checkpoint backfill">${checkpointText}·补抓</span>`;
+    if (record.CaptureStatus === 'data_waiting') return `<span class="checkpoint waiting-data">${checkpointText}·待更新</span>`;
+    if (record.CaptureStatus === 'completed_late') return `<span class="checkpoint late">${checkpointText}·晚${Number(record.DelayDays)||0}天</span>`;
+    if (record.CaptureStatus === 'legacy') return `<span class="checkpoint">${checkpointText}·旧版</span>`;
+    return `<span class="checkpoint">${checkpointText}</span>`;
+  }
+
+  function stCaptureMeta(record) {
+    const capturedDate = record.CapturedAt ? toDateKey(record.CapturedAt) : '';
+    const parts = [];
+    if (record.CaptureStatus === 'completed_backfill' && record.ScheduledDate) {
+      parts.push(`计划 ${record.ScheduledDate}`);
+    } else if (record.ScheduledDate && record.ScheduledDate !== record.Date) {
+      parts.push(`计划 ${record.ScheduledDate}`);
+    }
+    if (record.CaptureStatus === 'completed_backfill' && capturedDate && capturedDate !== record.Date) parts.push(`实抓 ${capturedDate}`);
+    if (record.CaptureStatus === 'data_waiting') parts.push('页面数据尚未更新');
+    if (record.CaptureStatus === 'completed_late' && capturedDate) parts.push(`实抓 ${capturedDate}`);
+    return parts.length ? `<span class="capture-meta">${parts.map(escapeHtml).join(' · ')}</span>` : '';
+  }
+
+  function enumerateDateKeys(startValue, endValue) {
+    const start = parseDate(startValue);
+    const end = parseDate(endValue);
+    if (!start || !end || start > end) return [];
+    const dates = [];
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      dates.push(toDateKey(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dates;
+  }
+
+
+  // 趋势图保留每日数据点，只对横轴日期标签做自适应稀疏显示。
+  // 基础节奏：7 天内每日、8–14 天每 2 天、15–30 天每 3 天、31–60 天每 5 天，
+  // 更长区间按 7/14/30 天递增；窄窗口会自动进一步减少标签。
+  function chooseAdaptiveDateLabelStep(dateCount, chartWidth = 1200) {
+    const count = Math.max(0, Number(dateCount) || 0);
+    if (count <= 1) return 1;
+
+    let baseStep = 1;
+    if (count <= 7) baseStep = 1;
+    else if (count <= 14) baseStep = 2;
+    else if (count <= 30) baseStep = 3;
+    else if (count <= 60) baseStep = 5;
+    else if (count <= 120) baseStep = 7;
+    else if (count <= 240) baseStep = 14;
+    else baseStep = 30;
+
+    // 7 天以内始终逐日展示；更长区间才根据可用宽度进一步稀疏。
+    if (count <= 7) return 1;
+    const width = Number.isFinite(Number(chartWidth)) && Number(chartWidth) > 0 ? Number(chartWidth) : 1200;
+    const targetLabels = Math.max(6, Math.min(12, Math.floor(Math.max(540, width - 80) / 90)));
+    const widthStep = Math.max(1, Math.ceil((count - 1) / Math.max(1, targetLabels - 1)));
+    const requiredStep = Math.max(baseStep, widthStep);
+    const allowedSteps = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60, 90];
+    return allowedSteps.find(step => step >= requiredStep) || Math.ceil(requiredStep / 30) * 30;
+  }
+
+  function formatAdaptiveDateLabel(value, index, dates) {
+    const key = toDateKey(value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return String(value || '');
+    const isEdge = index === 0 || index === dates.length - 1;
+    const previous = index > 0 ? toDateKey(dates[index - 1]) : '';
+    const yearChanged = previous && previous.slice(0, 4) !== key.slice(0, 4);
+    // 横轴缩短显示：日常趋势图不需要重复显示年份
+    return isEdge || yearChanged ? key.slice(5) : key.slice(5);
+  }
+
+  function buildAdaptiveDateAxis(dates, options = {}) {
+    const values = Array.isArray(dates) ? dates : [];
+    const forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
+    // 使用真实日期跨度，而不是数据点数量判断展示密度
+    const spanDays = values.length > 1 ? diffDays(values[values.length - 1], values[0]) + 1 : values.length;
+    // 日期展示规则：
+    // <=15天：每天展示
+    // 16-45天：每3天展示
+    // 46-90天：每7天展示
+    // >90天：根据窗口宽度自动稀疏
+    let step = chooseAdaptiveDateLabelStep(spanDays, options.chartWidth);
+    if (spanDays <= 15) step = 1;
+    else if (spanDays <= 45) step = 3;
+    else if (spanDays <= 90) step = 7;
+    const lastIndex = Math.max(0, values.length - 1);
+    const shouldShow = (index, value) => {
+      if (index === 0 || index === lastIndex) return true;
+      if (forcedDates.has(toDateKey(value))) return true;
+      return index % step === 0;
+    };
+
+    // 强制生成展示刻度，避免 ECharts 对 category 轴自动恢复全部日期标签
+    const displayIndexes = values.map((value, index) => shouldShow(index, value) ? index : null)
+      .filter(index => index !== null);
+
+    // 使用强制展示刻度：ECharts category 轴仍保留全部 data，
+    // 但通过 interval 控制显示。这里兼容 ECharts 5 的 category 渲染。
+    return {
+      type: 'category',
+      boundaryGap: options.boundaryGap === undefined ? false : Boolean(options.boundaryGap),
+      data: values,
+      axisLabel: {
+        interval: function(index) {
+          return displayIndexes.includes(index);
+        },
+        formatter: function(value, index) {
+          return displayIndexes.includes(index)
+            ? formatAdaptiveDateLabel(value, index, values)
+            : '';
+        },
+        hideOverlap: true,
+        showMinLabel: true,
+        showMaxLabel: true,
+        rotate: 0,
+        margin: 12
+      },
+      axisTick: {
+        alignWithLabel: true,
+        interval: function(index) {
+          return displayIndexes.includes(index);
+        }
+      },
+      axisPointer: {
+        label: { formatter: params => toDateKey(params.value) || String(params.value || '') }
+      }
+    };
+  }
+
+  function chooseLatestRecord(records) {
+    return [...records].sort((a, b) => {
+      const left = a.CapturedAt ? new Date(a.CapturedAt).getTime() : 0;
+      const right = b.CapturedAt ? new Date(b.CapturedAt).getTime() : 0;
+      return right - left;
+    })[0] || null;
+  }
+
+  function buildWeeklyNodeSummary(records, intervalDays = 7) {
+    const sorted = [...records].sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
+    if (!sorted.length) return [];
+    if (intervalDays === 0) {
+      return sorted.map((record, index) => ({
+        targetDate: record.Date,
+        record,
+        label: index === 0 ? '起点' : `D${diffDays(record.Date, sorted[0].Date)}`,
+        missing: false
+      }));
+    }
+    const grouped = new Map();
+    sorted.forEach(record => {
+      if (!grouped.has(record.Date)) grouped.set(record.Date, []);
+      grouped.get(record.Date).push(record);
+    });
+    const firstDate = sorted[0].Date;
+    const lastDate = sorted[sorted.length - 1].Date;
+    const totalDays = Math.max(0, diffDays(lastDate, firstDate));
+    const nodes = [];
+    for (let offset = 0; offset <= totalDays; offset += intervalDays) {
+      const targetDate = addDateDays(firstDate, offset);
+      const record = chooseLatestRecord(grouped.get(targetDate) || []);
+      nodes.push({ targetDate, record, label: offset === 0 ? '起点' : `W${Math.round(offset / 7)}`, missing: !record });
+    }
+    return nodes;
+  }
+
+  function getStProcessedDatesForScope(app, batch, records = []) {
+    const dates = new Set((records || []).map(item => toDateKey(item.Date)).filter(Boolean));
+    const countries = new Set((records || []).map(overviewCountryOfSt).filter(Boolean));
+    const completedStatuses = new Set(['completed', 'completed_no_data', 'existing', 'completed_range']);
+    getStProcessingStatuses().forEach(status => {
+      if (status.app !== app || status.batch !== batch) return;
+      if (countries.size && status.country && !countries.has(status.country)) return;
+      if (!completedStatuses.has(status.status)) return;
+      if (status.date) dates.add(status.date);
+    });
+    return [...dates].sort((a, b) => parseDate(a) - parseDate(b));
+  }
+
+  function getLatestStProcessedDate(app, batch, records = []) {
+    const dates = getStProcessedDatesForScope(app, batch, records);
+    return dates[dates.length - 1] || '';
+  }
+
+  function getStProcessedDatesForRecords(records = []) {
+    const scopes = new Map();
+    (records || []).forEach(item => {
+      const key = `${item.App}__${item.Batch}`;
+      if (!scopes.has(key)) scopes.set(key, { app:item.App, batch:item.Batch, records:[] });
+      scopes.get(key).records.push(item);
+    });
+    const dates = new Set();
+    scopes.forEach(scope => getStProcessedDatesForScope(scope.app, scope.batch, scope.records).forEach(date => dates.add(date)));
+    return [...dates].sort((a, b) => parseDate(a) - parseDate(b));
+  }
+
+  function renderStHistoryManager(records) {
+    const sorted = [...records].sort((a, b) => parseDate(b.Date) - parseDate(a.Date) || String(b.CapturedAt || '').localeCompare(String(a.CapturedAt || '')));
+    const rows = sorted.map(record => {
+      const note = getNote(record.App, record.Batch, record.Date);
+      return `
+        <div class="history-record">
+          <span class="history-date">${escapeHtml(displayDate(record.Date))}</span>
+          <span class="history-rank">#${escapeHtml(record.Rank)}</span>
+          ${stCheckpointBadge(record)}
+          ${stCaptureMeta(record)}
+          <span class="history-actions">
+            <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-date="${encode(record.Date)}" title="${note ? '编辑该日备注' : '添加该日备注'}">📝</button>
+            <span class="del-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="删除该日记录">✕</span>
+          </span>
+        </div>`;
+    }).join('');
+    return `<details class="history-manager"><summary>查看/管理历史（${sorted.length} 条）</summary><div class="history-list">${rows}</div></details>`;
+  }
+
+  function renderStProcessSummary(filteredData) {
+    const container = document.getElementById('stProcessSummary');
+    if (!container) return;
+    let statuses = getStProcessingStatuses();
+    if (selectedApps.length) statuses = statuses.filter(item => selectedApps.includes(item.app));
+    else if (selectedAppGroup) statuses = statuses.filter(item => getAppGroup(item.app) === selectedAppGroup);
+    if (selectedBatches.length) statuses = statuses.filter(item => selectedBatches.includes(item.batch));
+
+    const dataDates = new Set((filteredData || []).map(item => [item.App,item.Batch,overviewCountryOfSt(item),item.Date].join('|')));
+    const noData = statuses.filter(item => item.status === 'completed_no_data' && !dataDates.has([item.app,item.batch,item.country,item.date].join('|')));
+    const processedDates = new Set([
+      ...(filteredData || []).map(item => item.Date),
+      ...statuses.filter(item => ['completed','completed_no_data','existing'].includes(item.status)).map(item => item.date)
+    ]);
+    const rankedDates = new Set((filteredData || []).map(item => item.Date));
+    const chips = [
+      `已处理日期：${processedDates.size}`,
+      `有排名日期：${rankedDates.size}`,
+      `无排名日期：${new Set(noData.map(item=>item.date)).size}`
+    ];
+    if (noData.length) chips.push(`无排名：${[...new Set(noData.map(item=>item.date))].sort().join('、')}`);
+    container.innerHTML = chips.map(text=>`<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+  }
+
+  function renderDashboard() {
+    const tableBody = document.getElementById('tableBody');
+    if (tableBody) tableBody.innerHTML = '';
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+    renderSelectors(data);
+
+    // 精确 App 筛选优先，未选择 App 时才使用分组筛选。
+    let filteredData = selectedApps.length
+      ? data.filter(item => selectedApps.includes(item.App))
+      : applyGroupFilter(data);
+    filteredData = selectedBatches.length ? filteredData.filter(item => selectedBatches.includes(item.Batch)) : filteredData;
+    renderStProcessSummary(filteredData);
+
+    const keywordMap = {};
+    filteredData.forEach(item => {
+      const key = itemKey(item);
+      if (!keywordMap[key]) keywordMap[key] = [];
+      keywordMap[key].push(item);
+    });
+
+    const rows = Object.values(keywordMap).map(records => {
+      records.sort((a, b) => parseDate(a.Date) - parseDate(b.Date) || Number(a.Checkpoint ?? 999) - Number(b.Checkpoint ?? 999));
+      const first = records[0];
+      const last = records[records.length - 1]; // 最近一次实际有排名的记录
+      const latestProcessedDate = getLatestStProcessedDate(first.App, first.Batch, records) || last.Date;
+      const latestRecord = chooseLatestRecord(records.filter(item => item.Date === latestProcessedDate));
+      const interval = diffDays(latestProcessedDate, first.Date);
+      const firstRank = parseInt(first.Rank, 10);
+      const latestRank = latestRecord ? parseInt(latestRecord.Rank, 10) : null;
+      const ranks = records.map(item => parseInt(item.Rank, 10)).filter(rank => Number.isFinite(rank) && rank > 0);
+      const bestRank = ranks.length ? Math.min(...ranks) : null;
+
+      let changeHtml = '<span class="note-empty">—</span>';
+      if (latestRecord && latestProcessedDate !== first.Date) {
+        const diff = firstRank - latestRank;
+        if (diff > 0) changeHtml = `<span class="up">↑ ${diff}</span>`;
+        else if (diff < 0) changeHtml = `<span class="down">↓ ${Math.abs(diff)}</span>`;
+        else changeHtml = '<span style="color:#718096;">- 0</span>';
+      }
+
+      return {
+        App: first.App,
+        Batch: displayBatch(first.Batch),
+        RawBatch: first.Batch,
+        Keyword: first.Keyword,
+        first,
+        last,
+        latestRecord,
+        latestProcessedDate,
+        records,
+        interval,
+        bestRank,
+        changeHtml
+      };
+    }).sort((a, b) => `${a.App}${a.Batch}${a.Keyword}`.localeCompare(`${b.App}${b.Batch}${b.Keyword}`));
+
+    const table = document.getElementById('dataTable');
+    const empty = document.getElementById('emptyState');
+    table.style.display = rows.length ? 'table' : 'none';
+    empty.style.display = rows.length ? 'none' : 'block';
+
+    document.getElementById('tableBody').innerHTML = rows.map(row => {
+      const key = itemKey(row);
+      const historyManager = renderStHistoryManager(row.records);
+
+      const rowNotes = getNotesForBatch(row.App, row.Batch);
+      const notesListHtml = rowNotes.length
+        ? rowNotes.map(note => `
+          <div class="note-card">
+            <span class="note-date">${escapeHtml(displayDate(note.Date))}</span>
+            <span class="note-text">${escapeHtml(note.Text)}</span>
+            <button class="note-edit-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">编辑</button>
+            <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">删除</button>
+          </div>`).join('')
+        : `<span class="note-empty">暂无备注</span>`;
+      const noteDateAction = `<div class="note-date-action"><button class="note-date-pick-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.latestProcessedDate || row.last.Date)}">＋ 选择日期添加备注</button></div>`;
+      const noteAndHistoryHtml = `${notesListHtml}${noteDateAction}${historyManager}`;
+      const latestRankHtml = row.latestRecord
+        ? `#${escapeHtml(row.latestRecord.Rank)}`
+        : `<span class="note-empty">—</span><span class="capture-meta">${escapeHtml(displayDate(row.latestProcessedDate))} 暂无排名</span>`;
+
+      return `<tr>
+        <td><input class="item-check" type="checkbox" data-key="${encode(key)}" ${selectedItems.includes(key) ? 'checked' : ''}></td>
+        <td>${row.App}</td>
+        <td><span class="batch-tag">${displayBatch(row.Batch)}</span></td>
+        <td><b>${row.Keyword}</b></td>
+        <td>#${row.first.Rank}</td>
+        <td>${latestRankHtml}</td>
+        <td>${Number.isFinite(row.bestRank) ? `#${row.bestRank}` : '—'}</td>
+        <td>${row.changeHtml}</td>
+        <td class="note-cell">${noteAndHistoryHtml}</td>
+        <td><button class="delete-word-btn"
+          data-app="${encode(row.App)}"
+          data-batch="${encode(row.Batch)}"
+          data-keyword="${encode(row.Keyword)}">删整词</button></td>
+      </tr>`;
+    }).join('');
+
+    document.querySelectorAll('.item-check').forEach(input => {
+      input.addEventListener('change', () => toggleItem(decode(input.dataset.key)));
+    });
+
+    document.querySelectorAll('.del-day-btn').forEach(button => {
+      button.addEventListener('click', () => deleteSingleDate(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.keyword),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.note-day-btn, .note-edit-btn').forEach(button => {
+      button.addEventListener('click', () => editNote(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.note-date-pick-btn').forEach(button => {
+      button.addEventListener('click', () => chooseNoteDate(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.note-delete-btn').forEach(button => {
+      button.addEventListener('click', () => deleteNote(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.date)
+      ));
+    });
+
+    document.querySelectorAll('.delete-word-btn').forEach(button => {
+      button.addEventListener('click', () => deleteKeywordGroup(
+        decode(button.dataset.app),
+        decode(button.dataset.batch),
+        decode(button.dataset.keyword)
+      ));
+    });
+
+    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))));
+  }
+
+  function deleteSingleDate(app, batch, keyword, date) {
+    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】在 ${date} 的记录吗？`)) return;
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword && item.Date === date));
+    saveMasterData(data);
+    renderDashboard();
+  }
+
+  function deleteKeywordGroup(app, batch, keyword) {
+    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】的全部历史吗？`)) return;
+    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword));
+    saveMasterData(data);
+    selectedItems = selectedItems.filter(key => key !== `${app}__${batch}__${keyword}`);
+    localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+    renderDashboard();
+  }
+
+  function toggleBatch(batch) {
+    selectedBatches = selectedBatches.includes(batch)
+      ? selectedBatches.filter(item => item !== batch)
+      : [...selectedBatches, batch];
+    localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+    renderDashboard();
+  }
+
+  function toggleItem(key) {
+    selectedItems = selectedItems.includes(key)
+      ? selectedItems.filter(item => item !== key)
+      : [...selectedItems, key];
+    localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+    renderDashboard();
+  }
+
+  function updateChart(data) {
+    lastStChartData = Array.isArray(data) ? data.slice() : [];
+    const sortedDates = getStProcessedDatesForRecords(lastStChartData);
+    const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
+    const validRanks = data
+      .map(item => Number(item.Rank))
+      .filter(rank => Number.isFinite(rank) && rank > 0);
+    const maxRank = validRanks.length ? Math.max(...validRanks) : 1;
+    const bottomPadding = Math.max(10, Math.ceil(maxRank * 0.12));
+    const axisMax = Math.max(10, Math.ceil((maxRank + bottomPadding) / 10) * 10);
+    const noteY = axisMax;
+
+    const seriesMap = data.reduce((acc, item) => {
+      const key = itemKey(item);
+      if (!acc[key]) {
+        acc[key] = {
+          name: `${item.App} · ${item.Batch} · ${item.Keyword}`,
+          type: 'line',
+          connectNulls: true,
+          data: new Array(dates.length).fill(null)
+        };
+      }
+      const index = dates.indexOf(item.Date);
+      const rank = Number(item.Rank);
+      if (index !== -1 && Number.isFinite(rank) && rank > 0) acc[key].data[index] = rank;
+      return acc;
+    }, {});
+
+    const notes = [];
+    const seenNotes = new Set();
+    const noteScopes = new Map();
+    data.forEach(item => noteScopes.set(`${item.App}__${item.Batch}`, { App:item.App, Batch:item.Batch }));
+    noteScopes.forEach(scope => {
+      getNotesForBatch(scope.App, scope.Batch, dates).forEach(note => {
+        const key = noteKey(note.App, note.Batch, note.Date);
+        if (seenNotes.has(key)) return;
+        seenNotes.add(key);
+        notes.push({
+          value: [note.Date, noteY],
+          App: note.App,
+          Batch: note.Batch,
+          Date: note.Date,
+          Text: note.Text
+        });
+      });
+    });
+
+    const series = Object.values(seriesMap);
+    if (notes.length) {
+      series.push({
+        name: '备注',
+        type: 'scatter',
+        symbol: 'pin',
+        symbolSize: 42,
+        symbolOffset: [0, -6],
+        z: 20,
+        clip: false,
+        itemStyle: { color: '#ed8936' },
+        label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
+        tooltip: {
+          trigger: 'item',
+          position: function (point, params, dom, rect, size) {
+            const left = Math.min(point[0] + 12, size.viewSize[0] - size.contentSize[0] - 12);
+            const top = Math.max(8, point[1] - size.contentSize[1] - 18);
+            return [Math.max(8, left), top];
+          },
+          formatter: params => `<b>${escapeHtml(params.data.Date)}</b><br>${escapeHtml(params.data.App)}｜${escapeHtml(params.data.Batch)}<br>${escapeHtml(params.data.Text)}`
+        },
+        data: notes
+      });
+    }
+
+    if (!chart) return;
+    const forcedDates = [
+      ...notes.map(item => item.Date),
+      ...data.filter(item => CHECKPOINTS.includes(Number(item.Checkpoint))).map(item => item.Date)
+    ];
+    const xAxis = buildAdaptiveDateAxis(dates, {
+      chartWidth: chart.getWidth(),
+      forcedDates,
+      boundaryGap: false
+    });
+    chart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        formatter: params => {
+          if (!params || !params.length) return '';
+          let html = displayDate(params[0].axisValue);
+          params.forEach(item => {
+            html += `<br>${escapeHtml(item.seriesName || '')}<br>Rank: ${escapeHtml(item.value?.[1] ?? item.value ?? '')}`;
+          });
+          return html;
+        }
+      },
+      legend: { type: 'scroll', show: true, top: 6 },
+      grid: { left: 55, right: 35, top: 55, bottom: 72, containLabel: true },
+      xAxis,
+      yAxis: { type: 'value', inverse: true, nameLocation: 'start', name: '排名', min: 1, max: axisMax },
+      series
+    }, true);
+  }
+
+  function exportData() {
+    const payload = {
+      version: DASHBOARD_VERSION,
+      exportedAt: new Date().toISOString(),
+      data: normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')),
+      notes: Object.values(getNotesMap())
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `aso-dashboard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function groupRecordsForReport(records) {
+    const groups = {};
+    normalizeRecords(records).forEach(item => {
+      const key = itemKey(item);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+
+    return Object.values(groups).map(group => {
+      group.sort((a, b) => parseDate(a.Date) - parseDate(b.Date) || Number(a.Checkpoint ?? 999) - Number(b.Checkpoint ?? 999));
+      return group;
+    }).sort((a, b) => {
+      const left = `${a[0].App}${a[0].Batch}${a[0].Keyword}`;
+      const right = `${b[0].App}${b[0].Batch}${b[0].Keyword}`;
+      return left.localeCompare(right);
+    });
+  }
+
+  function formatRankPoint(record, emptyDate = '') {
+    if (record) return `#${record.Rank} (${record.Date})`;
+    return emptyDate ? `— (${emptyDate})` : '';
+  }
+
+  function safeFilePart(value) {
+    return String(value || '')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function renderTrendChartImage(app, batch, records) {
+    const container = document.createElement('div');
+    container.style.cssText = [
+      'position:fixed',
+      'left:-10000px',
+      'top:0',
+      'width:1400px',
+      'height:440px',
+      'background:#ffffff'
+    ].join(';');
+    document.body.appendChild(container);
+
+    const exportChart = echarts.init(container, null, { renderer: 'canvas' });
+    const sortedDates = getStProcessedDatesForScope(app, batch, records);
+    const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
+    const keywordMap = {};
+
+    records.forEach(item => {
+      if (!keywordMap[item.Keyword]) {
+        keywordMap[item.Keyword] = {
+          name: item.Keyword,
+          type: 'line',
+          symbol: 'circle',
+          symbolSize: 7,
+          connectNulls: true,
+          data: new Array(dates.length).fill(null)
+        };
+      }
+      const index = dates.indexOf(item.Date);
+      const rank = Number(item.Rank);
+      if (index !== -1 && Number.isFinite(rank) && rank > 0) keywordMap[item.Keyword].data[index] = rank;
+    });
+
+    const validRanks = records
+      .map(item => Number(item.Rank))
+      .filter(rank => Number.isFinite(rank) && rank > 0);
+    const maxRank = validRanks.length ? Math.max(...validRanks) : 1;
+    const bottomPadding = Math.max(10, Math.ceil(maxRank * 0.12));
+    const axisMax = Math.max(10, Math.ceil((maxRank + bottomPadding) / 10) * 10);
+    const noteY = axisMax;
+
+    exportChart.setOption({
+      animation: false,
+      backgroundColor: '#ffffff',
+      title: {
+        text: `${app}｜${batch}`,
+        subtext: '排名数字越小越好',
+        left: 'center',
+        top: 8,
+        textStyle: { fontSize: 20, fontWeight: 'bold' },
+        subtextStyle: { fontSize: 12 }
+      },
+      tooltip: { trigger: 'axis' },
+      legend: {
+        type: 'scroll',
+        bottom: 8,
+        left: 30,
+        right: 30
+      },
+      grid: { left: 70, right: 40, top: 85, bottom: 85 },
+      xAxis: buildAdaptiveDateAxis(dates, {
+        chartWidth: 1400,
+        forcedDates: [
+          ...getNotesForBatch(app, batch, dates).map(note => note.Date),
+          ...records.filter(item => CHECKPOINTS.includes(Number(item.Checkpoint))).map(item => item.Date)
+        ],
+        boundaryGap: false
+      }),
+      yAxis: {
+        type: 'value',
+        inverse: true,
+        nameLocation: 'start',
+        name: '排名',
+        min: 1,
+        max: axisMax,
+        minInterval: 1,
+        splitLine: { lineStyle: { color: '#e2e8f0' } }
+      },
+      series: [
+        ...Object.values(keywordMap),
+        ...(() => {
+          const batchNotes = getNotesForBatch(app, batch, dates);
+          if (!batchNotes.length) return [];
+          return [{
+            name: '备注',
+            type: 'scatter',
+            symbol: 'pin',
+            symbolSize: 42,
+            symbolOffset: [0, -6],
+            z: 20,
+            clip: false,
+            itemStyle: { color: '#ed8936' },
+            label: { show: true, formatter: '📝', color: '#fff', fontSize: 11 },
+            data: batchNotes.map(note => ({ value: [note.Date, noteY], Text: note.Text }))
+          }];
+        })()
+      ]
+    });
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const image = exportChart.getDataURL({
+      type: 'png',
+      pixelRatio: 2,
+      backgroundColor: '#ffffff'
+    });
+    exportChart.dispose();
+    container.remove();
+    return image;
+  }
+
+  function getAllRecords() {
+    return normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'));
+  }
+
+  function getCurrentFilteredRecords() {
+    let records = applyGroupFilter(getAllRecords());
+    if (selectedApps.length) {
+      records = records.filter(item => selectedApps.includes(item.App));
+    }
+    if (selectedBatches.length) {
+      records = records.filter(item => selectedBatches.includes(item.Batch));
+    }
+    return records;
+  }
+
+  function buildCurrentScopeLabel(records) {
+    const apps = [...new Set(records.map(item => item.App))];
+    const batches = [...new Set(records.map(item => item.Batch))];
+
+    if (apps.length === 1 && batches.length === 1) {
+      return `${apps[0]}｜${batches[0]}`;
+    }
+    if (apps.length === 1) {
+      return `${apps[0]}｜当前批次筛选`;
+    }
+    return '当前筛选';
+  }
+
+  async function exportExcelReport(records, scopeLabel, clickedButton) {
+    const excelButtons = [
+      document.getElementById('excelCurrentBtn'),
+      document.getElementById('excelAllBtn')
+    ].filter(Boolean);
+    const originalTexts = new Map(excelButtons.map(button => [button, button.textContent]));
+    const button = clickedButton;
+
+    if (!records.length) {
+      alert('当前没有可导出的排名数据。');
+      return;
+    }
+
+    if (typeof ExcelJS === 'undefined') {
+      alert('Excel 导出组件加载失败，请检查网络后刷新页面重试。');
+      return;
+    }
+
+    excelButtons.forEach(item => { item.disabled = true; });
+    button.textContent = '正在生成 Excel…';
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'ASO 数据中心';
+      workbook.created = new Date();
+      workbook.modified = new Date();
+
+      const summarySheet = workbook.addWorksheet('排名汇总', {
+        views: [{ state: 'frozen', ySplit: 4 }]
+      });
+
+      summarySheet.mergeCells('A1:G1');
+      const titleCell = summarySheet.getCell('A1');
+      titleCell.value = 'ASO 关键词排名汇总';
+      titleCell.font = { size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B6CB0' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      summarySheet.getRow(1).height = 30;
+
+      summarySheet.mergeCells('A2:G2');
+      const infoCell = summarySheet.getCell('A2');
+      infoCell.value = `导出范围：${scopeLabel}｜导出时间：${new Date().toLocaleString()}｜排名明细请查看“ST节点明细”工作表`;
+      infoCell.font = { size: 10, color: { argb: 'FF4A5568' } };
+      infoCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+      const headers = ['App', '测试批次', 'Keyword', '首刷排名', '最新排名', 'Rank Change', '备注'];
+      const headerRow = summarySheet.getRow(4);
+      headerRow.values = headers;
+      headerRow.height = 26;
+      headerRow.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A5568' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          bottom: { style: 'thin', color: { argb: 'FFCBD5E0' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E0' } }
+        };
+      });
+
+      const groups = groupRecordsForReport(records);
+      groups.forEach(group => {
+        const first = group[0];
+        const latestProcessedDate = getLatestStProcessedDate(first.App, first.Batch, group) || group[group.length - 1].Date;
+        const latest = chooseLatestRecord(group.filter(item => item.Date === latestProcessedDate));
+        const rankChange = latest ? Number(first.Rank) - Number(latest.Rank) : '';
+        const row = summarySheet.addRow([
+          first.App,
+          first.Batch,
+          first.Keyword,
+          formatRankPoint(first),
+          formatRankPoint(latest, latestProcessedDate),
+          rankChange,
+          getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
+            .map(note => `${note.Date}：${note.Text}`)
+            .join('\n')
+        ]);
+
+        row.height = 34;
+        row.eachCell((cell, colNumber) => {
+          cell.alignment = {
+            horizontal: colNumber === 3 ? 'left' : 'center',
+            vertical: 'middle',
+            wrapText: true
+          };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+        });
+
+        const changeCell = row.getCell(6);
+        if (Number.isFinite(rankChange)) changeCell.numFmt = '+0;-0;0';
+        if (Number.isFinite(rankChange) && rankChange > 0) {
+          changeCell.font = { bold: true, color: { argb: 'FF25855A' } };
+          changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6F6D5' } };
+        } else if (Number.isFinite(rankChange) && rankChange < 0) {
+          changeCell.font = { bold: true, color: { argb: 'FFC53030' } };
+          changeCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFED7D7' } };
+        }
+      });
+
+      summarySheet.columns = [
+        { key: 'app', width: 22 },
+        { key: 'batch', width: 18 },
+        { key: 'keyword', width: 34 },
+        { key: 'first', width: 22 },
+        { key: 'latest', width: 22 },
+        { key: 'change', width: 15 },
+        { key: 'notes', width: 42 }
+      ];
+      summarySheet.autoFilter = `A4:G${Math.max(4, summarySheet.rowCount)}`;
+
+      const nodeSheet = workbook.addWorksheet('ST节点明细', { views: [{ state:'frozen', ySplit:1 }] });
+      nodeSheet.columns = [
+        { header:'App', key:'app', width:22 },
+        { header:'测试批次', key:'batch', width:18 },
+        { header:'Keyword', key:'keyword', width:32 },
+        { header:'节点', key:'checkpoint', width:10 },
+        { header:'计划日期', key:'scheduledDate', width:14 },
+        { header:'数据日期', key:'dataDate', width:14 },
+        { header:'实际抓取时间', key:'capturedAt', width:22 },
+        { header:'延迟天数', key:'delayDays', width:11 },
+        { header:'状态', key:'status', width:18 },
+        { header:'排名', key:'rank', width:10 }
+      ];
+      records
+        .slice()
+        .sort((a,b)=>`${a.App}${a.Batch}${a.Keyword}`.localeCompare(`${b.App}${b.Batch}${b.Keyword}`) || parseDate(a.Date)-parseDate(b.Date))
+        .forEach(record => nodeSheet.addRow({
+          app:record.App,
+          batch:record.Batch,
+          keyword:record.Keyword,
+          checkpoint:(record.RunMode==='manual_range'||record.CaptureStatus==='completed_range')?'日数据':record.CaptureStatus==='manual_snapshot'?'手动':record.Checkpoint===null?`D${record.DayOffset}临时`:`D${record.Checkpoint}`,
+          scheduledDate:record.ScheduledDate || '',
+          dataDate:record.DataDate || record.Date,
+          capturedAt:record.CapturedAt || '',
+          delayDays:Number(record.DelayDays)||0,
+          status:record.CaptureStatus || 'legacy',
+          rank:Number(record.Rank)
+        }));
+      nodeSheet.getRow(1).eachCell(cell=>{
+        cell.font={bold:true,color:{argb:'FFFFFFFF'}};
+        cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4A5568'}};
+        cell.alignment={horizontal:'center',vertical:'middle'};
+      });
+      nodeSheet.autoFilter = `A1:J${Math.max(1,nodeSheet.rowCount)}`;
+
+      const trendSheet = workbook.addWorksheet('排名趋势图', {
+        properties: { defaultRowHeight: 18 },
+        views: [{ showGridLines: false }]
+      });
+      trendSheet.getColumn(1).width = 20;
+      for (let col = 2; col <= 12; col += 1) trendSheet.getColumn(col).width = 14;
+
+      const appBatchGroups = {};
+      records.forEach(item => {
+        const key = `${item.App}__${item.Batch}`;
+        if (!appBatchGroups[key]) appBatchGroups[key] = [];
+        appBatchGroups[key].push(item);
+      });
+
+      const sortedChartGroups = Object.values(appBatchGroups).sort((a, b) => {
+        const left = `${a[0].App}${a[0].Batch}`;
+        const right = `${b[0].App}${b[0].Batch}`;
+        return left.localeCompare(right);
+      });
+
+      let rowCursor = 1;
+      for (let index = 0; index < sortedChartGroups.length; index += 1) {
+        const group = sortedChartGroups[index];
+        const app = group[0].App;
+        const batch = group[0].Batch;
+        button.textContent = `正在生成图表 ${index + 1}/${sortedChartGroups.length}…`;
+
+        trendSheet.mergeCells(rowCursor, 1, rowCursor, 12);
+        const chartTitle = trendSheet.getCell(rowCursor, 1);
+        chartTitle.value = `${app}｜${batch}`;
+        chartTitle.font = { size: 15, bold: true, color: { argb: 'FF2D3748' } };
+        chartTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDF2F7' } };
+        chartTitle.alignment = { horizontal: 'left', vertical: 'middle' };
+        trendSheet.getRow(rowCursor).height = 26;
+
+        const imageBase64 = await renderTrendChartImage(app, batch, group);
+        const imageId = workbook.addImage({ base64: imageBase64, extension: 'png' });
+        trendSheet.addImage(imageId, {
+          tl: { col: 0, row: rowCursor },
+          ext: { width: 1180, height: 380 }
+        });
+
+        rowCursor += 22;
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const filename = `ASO排名跟踪_${safeFilePart(scopeLabel)}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      downloadBlob(
+        new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        safeFilePart(filename)
+      );
+    } catch (error) {
+      console.error('Excel 导出失败：', error);
+      alert(`Excel 导出失败：${error.message || error}`);
+    } finally {
+      excelButtons.forEach(item => {
+        item.disabled = false;
+        item.textContent = originalTexts.get(item);
+      });
+    }
+  }
+
+  function importData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const incoming = Array.isArray(parsed) ? parsed : parsed.data;
+        if (!Array.isArray(incoming)) throw new Error('文件中没有有效数据数组。');
+        mergeIncomingData(incoming);
+        if (!Array.isArray(parsed) && Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
+        renderDashboard();
+        renderOverview();
+        renderStorageSummary();
+        alert('导入完成。排名和备注均已合并，原数据未删除。');
+      } catch (error) {
+        alert(`导入失败：${error.message}`);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+
+  // ---------------- ASO 数据中心 / iOS 七麦 ----------------
+  function safeJsonParse(value, fallback) {
+    try { return JSON.parse(value); } catch (_) { return fallback; }
+  }
+
+  function getQimaiSnapshots() {
+    const parsed = safeJsonParse(localStorage.getItem(QIMAI_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeQimaiSnapshot).filter(Boolean) : [];
+  }
+
+  function saveQimaiSnapshots(snapshots) {
+    const map = new Map();
+    (snapshots || []).map(normalizeQimaiSnapshot).filter(Boolean).forEach(snapshot => {
+      const key = qimaiSnapshotKey(snapshot);
+      map.set(key, map.has(key) ? mergeIosSnapshotRecords(map.get(key), snapshot) : snapshot);
+    });
+    const sorted = [...map.values()].sort((a, b) => {
+      const dateDiff = (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0);
+      return dateDiff || String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    localStorage.setItem(QIMAI_KEY, JSON.stringify(sorted));
+  }
+
+  function canonicalIosAppIdentity(snapshot = {}) {
+    const appStoreId = String(snapshot.appStoreId || snapshot.config?.appStoreId || '').trim().toLowerCase();
+    if (appStoreId) return `id:${appStoreId}`;
+    const app = String(snapshot.app || snapshot.config?.app || 'unknown-app')
+      .normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+    return `app:${app}`;
+  }
+
+  function qimaiSnapshotKey(snapshot) {
+    return ['qimai_ios', canonicalIosAppIdentity(snapshot), snapshot.batch, snapshot.country, snapshot.date]
+      .map(value => String(value || '').trim().toLowerCase()).join('__');
+  }
+
+  function mergeIosSnapshotRows(rows) {
+    const map = new Map();
+    (rows || []).filter(Boolean).forEach(row => {
+      const key = String(row.keywordNormalized || row.keyword || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!key) return;
+      const previous = map.get(key) || {};
+      const sources = [...new Set([
+        ...(Array.isArray(previous.sourceKeywords) ? previous.sourceKeywords : [previous.sourceKeyword]),
+        ...(Array.isArray(row.sourceKeywords) ? row.sourceKeywords : [row.sourceKeyword])
+      ].map(value => String(value || '').trim()).filter(Boolean))];
+      map.set(key, { ...previous, ...row, sourceKeywords:sources });
+    });
+    return [...map.values()];
+  }
+
+  function mergeIosSnapshotRecords(previous, incoming) {
+    const newer = String(incoming.createdAt || '').localeCompare(String(previous.createdAt || '')) >= 0
+      ? incoming : previous;
+    return {
+      ...previous,
+      ...incoming,
+      ...newer,
+      changedResults:mergeIosSnapshotRows([...(previous.changedResults || []), ...(incoming.changedResults || [])]),
+      newEntryResults:mergeIosSnapshotRows([...(previous.newEntryResults || []), ...(incoming.newEntryResults || [])]),
+      failures:[...new Map([...(previous.failures || []), ...(incoming.failures || [])].map(item => [
+        [item?.sourceKeyword, item?.status, item?.message].map(value => String(value || '').trim().toLowerCase()).join('|'),
+        item
+      ])).values()]
+    };
+  }
+
+  function numberOrNull(value) {
+    if (value === null || value === undefined || value === '' || value === '-') return null;
+    const cleaned = String(value).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+    if (!cleaned) return null;
+    const number = Number(cleaned[0]);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function isEligibleIosIndex(value) {
+    const index = numberOrNull(value);
+    return Number.isFinite(index) && index >= IOS_MIN_INDEX;
+  }
+
+  function formatIosIndexThreshold() {
+    return `指数门槛：≥${IOS_MIN_INDEX.toLocaleString()}`;
+  }
+
+  function normalizeSourceKeywords(row) {
+    const values = Array.isArray(row?.sourceKeywords) ? row.sourceKeywords : [row?.sourceKeyword];
+    return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+  }
+
+  function normalizeQimaiRow(row, snapshot, category) {
+    if (!row || !String(row.keyword || '').trim()) return null;
+    const status = row.rankChangeStatus || (category === 'new_entry' ? 'new_entry' : 'changed');
+    return {
+      app: String(row.app || snapshot.app || '未命名 iOS App').trim(),
+      appStoreId: String(row.appStoreId || snapshot.appStoreId || '').trim(),
+      batch: String(row.batch || snapshot.batch || '未命名批次').trim(),
+      country: String(row.country || snapshot.country || '').trim().toUpperCase(),
+      date: toDateKey(snapshot.date || row.currentDate),
+      compareDate: toDateKey(snapshot.compareDate || row.compareDate || addDateDays(snapshot.date, -1)),
+      day: numberOrNull(snapshot.day || row.autoDay),
+      category,
+      keyword: String(row.keyword || '').trim(),
+      keywordNormalized: String(row.keywordNormalized || row.keyword || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase(),
+      sourceKeywords: normalizeSourceKeywords(row),
+      rank: numberOrNull(row.rank),
+      rankChangeText: String(row.rankChangeText ?? (status === 'new_entry' ? '新进榜' : '')).trim(),
+      rankChangeStatus: status,
+      rankChangeValue: numberOrNull(row.rankChangeValue),
+      index: numberOrNull(row.index),
+      resultCount: numberOrNull(row.resultCount),
+      popularity: numberOrNull(row.popularity),
+      capturedAt: row.capturedAt || snapshot.createdAt || new Date().toISOString()
+    };
+  }
+
+  function normalizeQimaiSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    const changedSource = Array.isArray(snapshot.changedResults) ? snapshot.changedResults : [];
+    const newSource = Array.isArray(snapshot.newEntryResults) ? snapshot.newEntryResults : [];
+    const firstRow = changedSource[0] || newSource[0] || {};
+    const date = toDateKey(snapshot.date || snapshot.currentDate || snapshot.config?.currentDate || firstRow.currentDate);
+    if (!date) return null;
+    const compareDate = toDateKey(snapshot.compareDate || snapshot.config?.compareDate || firstRow.compareDate || addDateDays(date, -1));
+    const base = {
+      id: snapshot.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: String(snapshot.taskId || '').trim(),
+      app: String(snapshot.app || snapshot.config?.app || '未命名 iOS App').trim(),
+      appStoreId: String(snapshot.appStoreId || snapshot.config?.appStoreId || '').trim(),
+      batch: String(snapshot.batch || snapshot.config?.batch || '未命名批次').trim(),
+      country: String(snapshot.country || snapshot.config?.country || '').trim().toUpperCase(),
+      day: numberOrNull(snapshot.day || snapshot.config?.autoDay),
+      date,
+      compareDate,
+      status: String(snapshot.status || 'success'),
+      createdAt: snapshot.createdAt || new Date().toISOString(),
+      failures: Array.isArray(snapshot.failures) ? snapshot.failures : []
+    };
+    base.changedResults = changedSource.map(row => normalizeQimaiRow(row, base, 'rank_changed')).filter(Boolean);
+    base.newEntryResults = newSource.map(row => normalizeQimaiRow(row, base, 'new_entry')).filter(Boolean);
+    return base;
+  }
+
+  function extractQimaiSnapshots(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.snapshots)) return payload.snapshots;
+    if (payload.snapshot) return [payload.snapshot];
+    if (payload.qimaiState) {
+      const state = payload.qimaiState;
+      return [{
+        app: state.config?.app,
+        appStoreId: state.config?.appStoreId,
+        batch: state.config?.batch,
+        country: state.config?.country,
+        date: state.config?.currentDate,
+        compareDate: state.config?.compareDate,
+        day: state.config?.autoDay,
+        status: state.status,
+        changedResults: state.changedResults,
+        newEntryResults: state.newEntryResults,
+        failures: state.failures,
+        createdAt: state.finishedAt || new Date().toISOString()
+      }];
+    }
+    if (payload.changedResults || payload.newEntryResults) return [payload];
+    return [];
+  }
+
+  function mergeQimaiPayload(payload, origin = 'import') {
+    const incoming = extractQimaiSnapshots(payload).map(normalizeQimaiSnapshot).filter(Boolean);
+    if (!incoming.length) throw new Error('文件中没有可识别的七麦快照。');
+    const existing = getQimaiSnapshots();
+    const map = new Map(existing.map(item => [qimaiSnapshotKey(item), item]));
+    incoming.forEach(item => map.set(qimaiSnapshotKey(item), item));
+    saveQimaiSnapshots([...map.values()]);
+    const originLabel = origin === 'plugin_direct' ? '插件自动同步' : origin === 'plugin_url' ? '插件兼容同步' : '导入';
+    addSyncLog({ source: 'qimai_ios', status: 'success', message: `${originLabel} ${incoming.length} 个七麦快照。` });
+    return incoming.length;
+  }
+
+  function addSyncLog(entry) {
+    const logs = safeJsonParse(localStorage.getItem(SYNC_LOG_KEY) || '[]', []);
+    logs.unshift({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, at: new Date().toISOString(), ...entry });
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(logs.slice(0, 200)));
+  }
+
+  function getSyncLogs() {
+    const logs = safeJsonParse(localStorage.getItem(SYNC_LOG_KEY) || '[]', []);
+    return Array.isArray(logs) ? logs : [];
+  }
+
+  function dedupeQimaiRows(snapshots, category) {
+    const map = new Map();
+    snapshots.forEach(snapshot => {
+      const rows = category === 'new_entry' ? snapshot.newEntryResults : snapshot.changedResults;
+      rows.forEach(row => {
+        // 与 v2.3.3+ 插件保持一致：两类 iOS 结果都只展示指数 >= 4605 的记录。
+        // 旧低指数快照仍保留在 localStorage 中，但不会进入列表、总览、导出或交叉验证。
+        if (!isEligibleIosIndex(row.index)) return;
+        const key = [row.app, row.appStoreId, row.batch, row.country, row.date, row.keywordNormalized, category].join('|');
+        if (!map.has(key)) {
+          map.set(key, { ...row, sourceKeywords: [...row.sourceKeywords], matchCount: 1 });
+          return;
+        }
+        const current = map.get(key);
+        row.sourceKeywords.forEach(source => { if (!current.sourceKeywords.includes(source)) current.sourceKeywords.push(source); });
+        current.matchCount += 1;
+        if (Number.isFinite(row.rank) && (!Number.isFinite(current.rank) || row.rank < current.rank)) {
+          current.rank = row.rank;
+          current.rankChangeText = row.rankChangeText;
+          current.rankChangeStatus = row.rankChangeStatus;
+          current.rankChangeValue = row.rankChangeValue;
+        }
+        current.index = maxFinite(current.index, row.index);
+        current.resultCount = maxFinite(current.resultCount, row.resultCount);
+        current.popularity = maxFinite(current.popularity, row.popularity);
+      });
+    });
+    return [...map.values()];
+  }
+
+  function maxFinite(a, b) {
+    const values = [a, b].filter(Number.isFinite);
+    return values.length ? Math.max(...values) : null;
+  }
+
+  function getQimaiTimelineStats(allSnapshots, row) {
+    const related = [];
+    ['rank_changed', 'new_entry'].forEach(category => {
+      dedupeQimaiRows(allSnapshots, category).forEach(item => {
+        if (item.app === row.app && item.appStoreId === row.appStoreId && item.batch === row.batch && item.country === row.country && item.keywordNormalized === row.keywordNormalized) {
+          related.push(item);
+        }
+      });
+    });
+    related.sort((a, b) => parseDate(a.date) - parseDate(b.date));
+    const dates = [...new Set(related.map(item => item.date))];
+    const ranks = related.map(item => item.rank).filter(Number.isFinite);
+    return {
+      history: related,
+      firstSeenDate: dates[0] || row.date,
+      latestDate: dates[dates.length - 1] || row.date,
+      occurrenceDays: dates.length,
+      bestRank: ranks.length ? Math.min(...ranks) : null,
+      latestRank: related.slice().reverse().find(item => Number.isFinite(item.rank))?.rank ?? row.rank
+    };
+  }
+
+  function getFilteredQimaiRows() {
+    const snapshots = getQimaiSnapshots();
+    let rows = dedupeQimaiRows(snapshots, iosCategory);
+    if (iosFilters.app) rows = rows.filter(item => item.app === iosFilters.app);
+    if (iosFilters.batch) rows = rows.filter(item => item.batch === iosFilters.batch);
+    if (iosFilters.country) rows = rows.filter(item => item.country === iosFilters.country);
+    if (iosFilters.date) rows = rows.filter(item => item.date === iosFilters.date);
+    const sourceQuery = iosFilters.source.trim().toLowerCase();
+    if (sourceQuery) rows = rows.filter(item => item.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery)));
+    const keywordQuery = iosFilters.keyword.trim().toLowerCase();
+    if (keywordQuery) rows = rows.filter(item => item.keyword.toLowerCase().includes(keywordQuery));
+    return rows.sort((a, b) => {
+      const countA = Number.isFinite(a.resultCount) ? a.resultCount : -Infinity;
+      const countB = Number.isFinite(b.resultCount) ? b.resultCount : -Infinity;
+      if (countA !== countB) return countB - countA;
+      const rankA = Number.isFinite(a.rank) ? a.rank : Number.MAX_SAFE_INTEGER;
+      const rankB = Number.isFinite(b.rank) ? b.rank : Number.MAX_SAFE_INTEGER;
+      return rankA - rankB || a.keyword.localeCompare(b.keyword);
+    });
+  }
+
+
+  function groupQimaiRowsByKeyword(rows) {
+    const groups = new Map();
+    (rows || []).forEach(row => {
+      const key = iosKeywordEntityKey(row);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          ...row,
+          entityKey:key,
+          sourceKeywords:[...row.sourceKeywords],
+          history:[]
+        });
+      }
+      const group = groups.get(key);
+      group.history.push(row);
+      row.sourceKeywords.forEach(source => {
+        if (!group.sourceKeywords.includes(source)) group.sourceKeywords.push(source);
+      });
+    });
+
+    return [...groups.values()].map(group => {
+      group.history.sort((a,b) => {
+        const dateDiff=(parseDate(a.date)?.getTime()||0)-(parseDate(b.date)?.getTime()||0);
+        return dateDiff || String(a.capturedAt||'').localeCompare(String(b.capturedAt||''));
+      });
+      const latest=group.history[group.history.length-1] || group;
+      const bestRank=group.history.map(item=>item.rank).filter(Number.isFinite);
+      return {
+        ...group,
+        ...latest,
+        entityKey:group.entityKey,
+        sourceKeywords:group.sourceKeywords,
+        history:group.history,
+        latestDate:latest.date,
+        occurrenceDays:new Set(group.history.map(item=>item.date)).size,
+        bestRank:bestRank.length?Math.min(...bestRank):null
+      };
+    }).sort((a,b) => {
+      const countA=Number.isFinite(a.resultCount)?a.resultCount:-Infinity;
+      const countB=Number.isFinite(b.resultCount)?b.resultCount:-Infinity;
+      if(countA!==countB)return countB-countA;
+      const dateDiff=(parseDate(b.latestDate)?.getTime()||0)-(parseDate(a.latestDate)?.getTime()||0);
+      if(dateDiff)return dateDiff;
+      const changeA=Math.abs(Number.isFinite(a.rankChangeValue)?a.rankChangeValue:0);
+      const changeB=Math.abs(Number.isFinite(b.rankChangeValue)?b.rankChangeValue:0);
+      return changeB-changeA || String(a.keyword||'').localeCompare(String(b.keyword||''));
+    });
+  }
+
+  function getFilteredQimaiKeywordGroups() {
+    return groupQimaiRowsByKeyword(getFilteredQimaiRows());
+  }
+
+  function renderIosSourceChips(sourceKeywords) {
+    const values=[...new Set((sourceKeywords||[]).filter(Boolean))];
+    const visible=values.slice(0,3);
+    const chips=visible.map(value=>`<span class="ios-source-chip" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`);
+    if(values.length>visible.length)chips.push(`<span class="ios-source-chip ios-source-more">+${values.length-visible.length}</span>`);
+    return `<div class="ios-source-chips" title="${escapeHtml(values.join(', '))}">${chips.join('')}</div>`;
+  }
+
+  function renderIosHistoryChips(history, category, rowIndex) {
+    const items=[...(history||[])];
+    const visible=items.slice(-4);
+    const chips=visible.map(item=>{
+      const status=category==='new_entry'?'新进榜':(item.rankChangeText||'—');
+      return `<span class="ios-history-chip"><b>${escapeHtml(String(item.date||'').slice(5))}</b><span class="${rankChangeClass(item.rankChangeStatus)}">${escapeHtml(status)}</span><span>指数 ${displayNumber(item.index)}</span></span>`;
+    });
+    const more=items.length>visible.length?`<button class="ios-history-more ios-keyword-detail" data-row-index="${rowIndex}">查看全部 ${items.length} 条</button>`:'';
+    return `<div class="ios-history-chips">${chips.join('')}${more}</div>`;
+  }
+
+  function selectOptions(element, values, selected, allLabel) {
+    const unique = [...new Set(values.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+    if (selected && !unique.includes(selected)) selected = '';
+    element.innerHTML = [`<option value="">${allLabel}</option>`, ...unique.map(value => `<option value="${encode(value)}">${escapeHtml(value)}</option>`)].join('');
+    element.value = selected ? encode(selected) : '';
+    return selected;
+  }
+
+  function renderIosSelectors() {
+    const snapshots = getQimaiSnapshots();
+    iosFilters.app = selectOptions(document.getElementById('iosAppSelect'), snapshots.map(item => item.app), iosFilters.app, '全部 App');
+    const appScoped = iosFilters.app ? snapshots.filter(item => item.app === iosFilters.app) : snapshots;
+    iosFilters.batch = selectOptions(document.getElementById('iosBatchSelect'), appScoped.map(item => item.batch), iosFilters.batch, '全部批次');
+    const batchScoped = iosFilters.batch ? appScoped.filter(item => item.batch === iosFilters.batch) : appScoped;
+    iosFilters.country = selectOptions(document.getElementById('iosCountrySelect'), batchScoped.map(item => item.country), iosFilters.country, '全部国家');
+    const countryScoped = iosFilters.country ? batchScoped.filter(item => item.country === iosFilters.country) : batchScoped;
+    const dates = countryScoped.map(item => item.date).sort((a, b) => parseDate(b) - parseDate(a));
+    iosFilters.date = selectOptions(document.getElementById('iosDateSelect'), dates, iosFilters.date, '全部日期');
+    persistIosFilters();
+  }
+
+  function persistIosFilters() {
+    localStorage.setItem('aso_ios_filter_app_v200', iosFilters.app || '');
+    localStorage.setItem('aso_ios_filter_batch_v200', iosFilters.batch || '');
+    localStorage.setItem('aso_ios_filter_country_v200', iosFilters.country || '');
+    localStorage.setItem('aso_ios_filter_date_v200', iosFilters.date || '');
+  }
+
+  function rankChangeClass(status) {
+    if (status === 'up') return 'rank-up';
+    if (status === 'down') return 'rank-down';
+    if (status === 'new_entry') return 'rank-new';
+    return 'rank-drop';
+  }
+
+  function displayNumber(value) {
+    return Number.isFinite(value) ? value.toLocaleString() : '—';
+  }
+
+  function iosKeywordEntityKey(row) {
+    return [row.app, row.appStoreId, row.batch, row.country, row.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|');
+  }
+
+  function saveIosSelection() {
+    localStorage.setItem(IOS_SELECTION_KEY, JSON.stringify([...selectedIosKeywords]));
+  }
+
+  function getAllIosKeywordEntities() {
+    const snapshots = getQimaiSnapshots();
+    const rows = [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
+      .sort((a, b) => parseDate(b.date) - parseDate(a.date));
+    const map = new Map();
+    rows.forEach(row => {
+      const key = iosKeywordEntityKey(row);
+      if (!map.has(key)) map.set(key, row);
+    });
+    return map;
+  }
+
+  function pruneIosSelection() {
+    const validKeys = new Set(getAllIosKeywordEntities().keys());
+    const next = new Set([...selectedIosKeywords].filter(key => validKeys.has(key)));
+    if (next.size !== selectedIosKeywords.size) {
+      selectedIosKeywords = next;
+      saveIosSelection();
+    }
+  }
+
+  function renderIosOverviewTrend() {
+    pruneIosSelection();
+    const badge = document.getElementById('iosSelectedBadge');
+    const empty = document.getElementById('iosOverviewTrendEmpty');
+    const chartElement = document.getElementById('iosOverviewTrendChart');
+    const selectedKeys = [...selectedIosKeywords];
+    badge.textContent = `已选 ${selectedKeys.length}`;
+    document.getElementById('iosSelectionNote').textContent = selectedKeys.length
+      ? `已勾选 ${selectedKeys.length} 个关键词；折线图最多同时展示 ${MAX_IOS_TREND_SERIES} 条。`
+      : '点击关键词或勾选后，下方折线图会显示跨日期排名趋势。';
+
+    if (!selectedKeys.length || !window.echarts) {
+      empty.classList.remove('hidden');
+      chartElement.classList.add('hidden');
+      if (iosOverviewTrendChart) iosOverviewTrendChart.clear();
+      return;
+    }
+
+    const entityMap = getAllIosKeywordEntities();
+    const snapshots = getQimaiSnapshots();
+    const selectedRows = selectedKeys.map(key => entityMap.get(key)).filter(Boolean).slice(0, MAX_IOS_TREND_SERIES);
+    const allDates = [...new Set(selectedRows.flatMap(row => getQimaiTimelineStats(snapshots, row).history.map(item => item.date)))]
+      .sort((a, b) => parseDate(a) - parseDate(b));
+    const duplicateNames = selectedRows.reduce((map, row) => map.set(row.keyword, (map.get(row.keyword) || 0) + 1), new Map());
+    const series = selectedRows.map(row => {
+      const stats = getQimaiTimelineStats(snapshots, row);
+      const ranks = {};
+      stats.history.forEach(item => {
+        if (!Number.isFinite(item.rank)) return;
+        if (!Number.isFinite(ranks[item.date]) || item.rank < ranks[item.date]) ranks[item.date] = item.rank;
+      });
+      const name = duplicateNames.get(row.keyword) > 1 ? `${row.keyword}｜${row.app}` : row.keyword;
+      return { name, type:'line', connectNulls:false, symbol:'circle', symbolSize:7, data:allDates.map(date => ranks[date] ?? null) };
+    });
+
+    empty.classList.add('hidden');
+    chartElement.classList.remove('hidden');
+    if (!iosOverviewTrendChart) iosOverviewTrendChart = echarts.init(chartElement);
+    iosOverviewTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ type:'scroll', top:0 },
+      grid:{ left:52, right:24, top:54, bottom:48, containLabel:true },
+      xAxis:{ ...buildAdaptiveDateAxis(allDates, { chartWidth:document.getElementById('iosOverviewTrendChart')?.clientWidth || 1200, boundaryGap:false }), name:'抓取日期' },
+      yAxis:{ type:'value', inverse:true, nameLocation: 'start', min:1, name:'排名（越小越好）' },
+      series
+    }, true);
+    setTimeout(() => iosOverviewTrendChart.resize(), 30);
+  }
+
+  function qimaiRawRowMatchesFilters(row, snapshot) {
+    const normalized = normalizeQimaiRow(row, snapshot, iosCategory);
+    if (!normalized || !isEligibleIosIndex(normalized.index)) return false;
+    if (iosFilters.app && normalized.app !== iosFilters.app) return false;
+    if (iosFilters.batch && normalized.batch !== iosFilters.batch) return false;
+    if (iosFilters.country && normalized.country !== iosFilters.country) return false;
+    if (iosFilters.date && normalized.date !== iosFilters.date) return false;
+    const sourceQuery = iosFilters.source.trim().toLowerCase();
+    if (sourceQuery && !normalized.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery))) return false;
+    const keywordQuery = iosFilters.keyword.trim().toLowerCase();
+    if (keywordQuery && !normalized.keyword.toLowerCase().includes(keywordQuery)) return false;
+    return true;
+  }
+
+  function clearCurrentIosView() {
+    const visibleRows = getFilteredQimaiRows();
+    if (!visibleRows.length) return alert('当前筛选范围没有可清空的数据。');
+    const categoryLabel = iosCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动';
+    const scope = [iosFilters.app || '全部 App', iosFilters.batch || '全部批次', iosFilters.country || '全部国家', iosFilters.date || '全部日期'].join('｜');
+    if (!confirm(`确定清空当前筛选数据吗？\n\n页面：${categoryLabel}\n范围：${scope}\n去重后可见：${visibleRows.length} 条\n\n另一分类和 ST 数据不会删除。建议先导出全部 JSON。`)) return;
+
+    const snapshots = getQimaiSnapshots();
+    const targetKeys = new Set(visibleRows.map(row => [row.app,row.appStoreId,row.batch,row.country,row.date,row.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|')));
+    let removedRaw = 0;
+    const next = snapshots.map(snapshot => {
+      const copy = { ...snapshot, changedResults:[...snapshot.changedResults], newEntryResults:[...snapshot.newEntryResults] };
+      const field = iosCategory === 'new_entry' ? 'newEntryResults' : 'changedResults';
+      const before = copy[field].length;
+      copy[field] = copy[field].filter(row => {
+        const normalized = normalizeQimaiRow(row, copy, iosCategory);
+        if (!normalized) return true;
+        const key = [normalized.app,normalized.appStoreId,normalized.batch,normalized.country,normalized.date,normalized.keywordNormalized].map(value => String(value || '').trim().toLowerCase()).join('|');
+        return !targetKeys.has(key);
+      });
+      removedRaw += before - copy[field].length;
+      return copy;
+    }).filter(snapshot => snapshot.changedResults.length || snapshot.newEntryResults.length || snapshot.status === 'zero_result');
+
+    saveQimaiSnapshots(next);
+    const removedKeys = new Set(visibleRows.map(iosKeywordEntityKey));
+    selectedIosKeywords = new Set([...selectedIosKeywords].filter(key => !removedKeys.has(key)));
+    saveIosSelection();
+    addSyncLog({ source:'qimai_ios', status:'success', message:`已清空当前筛选：${categoryLabel}，原始记录 ${removedRaw} 条。` });
+    renderIosDashboard();
+    alert(`已清空当前筛选数据，共删除 ${removedRaw} 条原始记录。`);
+  }
+
+  function iosTaskScopeReady(filters) {
+    return Boolean(filters?.app && filters?.batch && filters?.country);
+  }
+
+  function updateIosTaskDeleteButtons() {
+    const qimaiButton = document.getElementById('iosDeleteTaskBtn');
+    if (qimaiButton) {
+      const ready = iosTaskScopeReady(iosFilters);
+      qimaiButton.disabled = !ready;
+      qimaiButton.title = ready
+        ? `删除七麦任务：${iosFilters.app}｜${iosFilters.batch}｜${iosFilters.country}`
+        : '请先选择具体 App、测试批次和国家';
+    }
+    const ddButton = document.getElementById('ddDeleteTaskBtn');
+    if (ddButton) {
+      const ready = iosTaskScopeReady(ddFilters);
+      ddButton.disabled = !ready;
+      ddButton.title = ready
+        ? `删除点点任务：${ddFilters.app}｜${ddFilters.batch}｜${ddFilters.country}`
+        : '请先选择具体 App、测试批次和国家';
+    }
+  }
+
+  function deleteCurrentQimaiTask() {
+    if (!iosTaskScopeReady(iosFilters)) {
+      alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
+      return;
+    }
+    const { app, batch, country } = iosFilters;
+    const snapshots = getQimaiSnapshots();
+    const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
+    if (!matched.length) {
+      alert('当前 App / 批次 / 国家下没有可删除的七麦任务快照。');
+      return;
+    }
+    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
+    if (!confirm(`确定彻底删除当前七麦任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或点点数据。建议先导出全部 JSON。`)) return;
+
+    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
+    saveQimaiSnapshots(next);
+    selectedIosKeywords.clear();
+    saveIosSelection();
+    iosFilters.date = '';
+    iosFilters.source = '';
+    iosFilters.keyword = '';
+    const sourceInput = document.getElementById('iosSourceInput');
+    const keywordInput = document.getElementById('iosKeywordInput');
+    if (sourceInput) sourceInput.value = '';
+    if (keywordInput) keywordInput.value = '';
+    addSyncLog({ source:'qimai_ios', status:'success', message:`已删除七麦任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
+    renderIosDashboard();
+    renderCrossValidation();
+    renderOverview();
+    renderStorageSummary();
+    alert(`已删除七麦任务：${app}｜${batch}｜${country}。`);
+  }
+
+  function deleteCurrentDiandianTask() {
+    if (!iosTaskScopeReady(ddFilters)) {
+      alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
+      return;
+    }
+    const { app, batch, country } = ddFilters;
+    const snapshots = getDiandianSnapshots();
+    const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
+    if (!matched.length) {
+      alert('当前 App / 批次 / 国家下没有可删除的点点任务快照。');
+      return;
+    }
+    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
+    if (!confirm(`确定彻底删除当前点点任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或七麦数据。建议先导出全部 JSON。`)) return;
+
+    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
+    saveDiandianSnapshots(next);
+    ddSelectedTrendKey = '';
+    ddFilters.date = '';
+    ddFilters.source = '';
+    ddFilters.keyword = '';
+    const sourceInput = document.getElementById('ddSourceInput');
+    const keywordInput = document.getElementById('ddKeywordInput');
+    if (sourceInput) sourceInput.value = '';
+    if (keywordInput) keywordInput.value = '';
+    addSyncLog({ source:'diandian_ios', status:'success', message:`已删除点点任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
+    renderDiandianDashboard();
+    renderCrossValidation();
+    renderOverview();
+    renderStorageSummary();
+    alert(`已删除点点任务：${app}｜${batch}｜${country}。`);
+  }
+
+  function sortIndexRows(rows, direction) {
+    if (!direction) return rows;
+    const factor = direction === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const left = Number.isFinite(a.index) ? a.index : (direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+      const right = Number.isFinite(b.index) ? b.index : (direction === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+      if (left !== right) return (left - right) * factor;
+      return String(a.keyword || '').localeCompare(String(b.keyword || ''));
+    });
+  }
+
+  function sortButtonHtml(source, direction) {
+    const symbol = direction === 'desc' ? '↓' : direction === 'asc' ? '↑' : '⇅';
+    const label = direction === 'desc' ? '指数降序' : direction === 'asc' ? '指数升序' : '按指数排序';
+    return `<button type="button" class="table-sort-btn ${direction ? 'active' : ''}" data-index-sort="${source}" title="${label}">最新指数 ${symbol}</button>`;
+  }
+
+  function renderIosDashboard() {
+    renderIosSelectors();
+    updateIosTaskDeleteButtons();
+    document.querySelectorAll('[data-ios-category]').forEach(button => button.classList.toggle('active', button.dataset.iosCategory === iosCategory));
+    const allSnapshots = getQimaiSnapshots();
+    const rawRows = getFilteredQimaiRows();
+    let rows = groupQimaiRowsByKeyword(rawRows);
+    rows = sortIndexRows(rows, iosIndexSort);
+    document.getElementById('iosRecordBadge').textContent = `${rows.length} 个关键词`;
+    document.getElementById('iosEmpty').classList.toggle('hidden', rows.length > 0);
+    const tableWrap=document.getElementById('iosTableWrap');
+    tableWrap.classList.toggle('hidden', rows.length === 0);
+    tableWrap.classList.add('ios-keyword-table');
+
+    const latestDate = rawRows.map(item => item.date).sort((a, b) => parseDate(b) - parseDate(a))[0] || '—';
+    const uniqueSources = new Set(rows.flatMap(item => item.sourceKeywords));
+    document.getElementById('iosSummaryLine').innerHTML = [
+      `当前类型：${iosCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动'}`,
+      `关键词：${rows.length}`,
+      `历史记录：${rawRows.length}`,
+      `来源词：${uniqueSources.size}`,
+      `最新日期：${latestDate}`,
+      formatIosIndexThreshold(),
+      '同一关键词已合并'
+    ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+
+    const headers = ['勾选','关键词','来源词','最新抓取日期', iosCategory === 'new_entry' ? '最新状态' : '最新排名变动',sortButtonHtml('qimai', iosIndexSort),'历史追踪'];
+    const visibleKeys = rows.map(iosKeywordEntityKey);
+    const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every(key => selectedIosKeywords.has(key));
+    const someVisibleSelected = visibleKeys.some(key => selectedIosKeywords.has(key));
+    document.getElementById('iosTableHead').innerHTML = `<tr>${headers.map((header, index) => index === 0 ? `<th><input id="iosSelectAllVisible" class="ios-checkbox" type="checkbox" aria-label="全选当前筛选" ${allVisibleSelected ? 'checked' : ''}></th>` : `<th>${header}</th>`).join('')}</tr>`;
+    document.querySelector('[data-index-sort="qimai"]')?.addEventListener('click', () => {
+      iosIndexSort = iosIndexSort === 'desc' ? 'asc' : 'desc';
+      localStorage.setItem('aso_ios_index_sort_v225', iosIndexSort);
+      renderIosDashboard();
+    });
+    const selectAll = document.getElementById('iosSelectAllVisible');
+    if (selectAll) selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
+    document.getElementById('iosTableBody').innerHTML = rows.slice(0, 1000).map((row, index) => {
+      const entityKey = iosKeywordEntityKey(row);
+      return `<tr>
+        <td><input class="ios-checkbox ios-row-select" type="checkbox" data-row-index="${index}" ${selectedIosKeywords.has(entityKey) ? 'checked' : ''}></td>
+        <td class="ios-keyword-main"><button class="keyword-link ios-keyword-trend ${selectedIosKeywords.has(entityKey) ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
+        <td>${renderIosSourceChips(row.sourceKeywords)}</td>
+        <td class="ios-latest-date">${escapeHtml(displayDate(row.latestDate || row.date || ''))}</td>
+        <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(iosCategory === 'new_entry' ? '新进榜' : (row.rankChangeText || '—'))}</td>
+        <td class="ios-latest-metric">${displayNumber(row.index)}</td>
+        <td class="ios-history-cell">${renderIosHistoryChips(row.history, iosCategory, index)}</td>
+      </tr>`;
+    }).join('');
+    document.querySelectorAll('.ios-keyword-trend').forEach(button => button.addEventListener('click', () => {
+      const row = rows[Number(button.dataset.rowIndex)];
+      if (!row) return;
+      const key = iosKeywordEntityKey(row);
+      const willSelect = !selectedIosKeywords.has(key);
+      if (willSelect) {
+        if (selectedIosKeywords.size >= MAX_IOS_TREND_SERIES) {
+          alert(`最多同时展示 ${MAX_IOS_TREND_SERIES} 个关键词，请先取消部分关键词。`);
+          return;
+        }
+        selectedIosKeywords.add(key);
+      } else {
+        selectedIosKeywords.delete(key);
+      }
+      saveIosSelection();
+      renderIosDashboard();
+      if (willSelect) {
+        requestAnimationFrame(() => document.querySelector('#iosSection .ios-chart-panel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      }
+    }));
+    document.querySelectorAll('.ios-keyword-detail').forEach(button => button.addEventListener('click', () => openKeywordDrawer(rows[Number(button.dataset.rowIndex)])));
+    document.querySelectorAll('.ios-row-select').forEach(input => input.addEventListener('change', () => {
+      const row = rows[Number(input.dataset.rowIndex)];
+      const key = iosKeywordEntityKey(row);
+      if (input.checked) selectedIosKeywords.add(key); else selectedIosKeywords.delete(key);
+      saveIosSelection();
+      renderIosDashboard();
+    }));
+    if (selectAll) selectAll.addEventListener('change', () => {
+      visibleKeys.forEach(key => { if (selectAll.checked) selectedIosKeywords.add(key); else selectedIosKeywords.delete(key); });
+      saveIosSelection();
+      renderIosDashboard();
+    });
+    renderIosOverviewTrend();
+    renderOverview();
+    renderStorageSummary();
+  }
+
+  function openKeywordDrawer(row) {
+    if (!row) return;
+    const snapshots = getQimaiSnapshots();
+    const stats = getQimaiTimelineStats(snapshots, row);
+    document.getElementById('drawerKeyword').textContent = row.keyword;
+    document.getElementById('drawerSubtitle').textContent = `${row.app}｜${row.batch}｜${row.country || '—'}｜来源词：${row.sourceKeywords.join(', ')}`;
+    document.getElementById('drawerStats').innerHTML = [
+      ['首次发现', stats.firstSeenDate], ['最新日期', stats.latestDate], ['出现天数', `${stats.occurrenceDays} 天`], ['最佳排名', displayNumber(stats.bestRank)],
+      ['最新排名', displayNumber(stats.latestRank)], ['结果数', displayNumber(row.resultCount)], ['指数', displayNumber(row.index)], ['流行度', displayNumber(row.popularity)]
+    ].map(([label, value]) => `<div class="detail-item"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join('');
+    document.getElementById('drawerHistoryBody').innerHTML = stats.history.map(item => `<tr><td>${escapeHtml(displayDate(item.date))}</td><td>${item.category === 'new_entry' ? '新进榜' : '排名变动'}</td><td>${displayNumber(item.rank)}</td><td class="${rankChangeClass(item.rankChangeStatus)}">${escapeHtml(item.rankChangeText || '—')}</td><td>${displayNumber(item.index)}</td><td>${displayNumber(item.resultCount)}</td><td>${displayNumber(item.popularity)}</td><td class="source-list">${escapeHtml(item.sourceKeywords.join(', '))}</td></tr>`).join('');
+
+    const mask = document.getElementById('keywordDrawerMask');
+    mask.classList.add('open');
+    mask.setAttribute('aria-hidden', 'false');
+    if (window.echarts) {
+      if (!iosTrendChart) iosTrendChart = echarts.init(document.getElementById('iosTrendChart'));
+      const dates = [...new Set(stats.history.map(item => item.date))].sort((a, b) => parseDate(a) - parseDate(b));
+      const rankByDate = {};
+      stats.history.forEach(item => { if (Number.isFinite(item.rank)) rankByDate[item.date] = item.rank; });
+      iosTrendChart.setOption({
+        tooltip: { trigger:'axis' }, grid:{ left:45,right:20,top:30,bottom:42,containLabel:true },
+        xAxis:buildAdaptiveDateAxis(dates, { chartWidth:document.getElementById('iosTrendChart')?.clientWidth || 720, boundaryGap:false }), yAxis:{ type:'value',inverse:true,nameLocation: 'start',name:'排名',min:1 },
+        series:[{ name:'排名',type:'line',smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
+      }, true);
+      setTimeout(() => iosTrendChart.resize(), 30);
+    }
+  }
+
+  function closeKeywordDrawer() {
+    const mask = document.getElementById('keywordDrawerMask');
+    mask.classList.remove('open');
+    mask.setAttribute('aria-hidden', 'true');
+  }
+
+  function overviewPlatformName(source) {
+    return ({ st:'Sensor Tower', qimai:'iOS 七麦', diandian:'iOS 点点' })[source] || source;
+  }
+
+  function overviewCountryOfSt(item) {
+    return String(item.Country || item.country || '').trim().toUpperCase();
+  }
+
+  function overviewDateValue(value) {
+    return toDateKey(value || '');
+  }
+
+  function latestIsoValue(values) {
+    return (values || []).filter(Boolean).sort((a,b) => {
+      const ad = new Date(a).getTime();
+      const bd = new Date(b).getTime();
+      return (Number.isFinite(bd) ? bd : 0) - (Number.isFinite(ad) ? ad : 0);
+    })[0] || '';
+  }
+
+
+  // 总览页会同时接收 ISO 时间、日期字符串和旧版时间字段。
+  // 旧版缺少该函数会导致 renderOverview 在更新“最近同步时间”时中断，
+  // 从而出现顶部统计有数字、但“最新变化”和“同步状态”整块空白。
+  function formatDateTime(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '—';
+    const date = new Date(raw);
+    if (!Number.isFinite(date.getTime())) return raw;
+    const parts = new Intl.DateTimeFormat('zh-CN', {
+      year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', hour12:false
+    }).formatToParts(date).reduce((map, part) => {
+      map[part.type] = part.value;
+      return map;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+  }
+
+  function overviewMetaRows() {
+    const rows = [];
+    normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])).forEach(item => rows.push({
+      source:'st', app:item.App, batch:item.Batch, country:overviewCountryOfSt(item), date:item.Date,
+      keyword:String(item.Keyword || '').trim(), capturedAt:item.CapturedAt || ''
+    }));
+    getQimaiSnapshots().forEach(snapshot => rows.push({ source:'qimai', app:snapshot.app, batch:snapshot.batch, country:snapshot.country, date:snapshot.date, capturedAt:snapshot.createdAt || '' }));
+    getDiandianSnapshots().forEach(snapshot => rows.push({ source:'diandian', app:snapshot.app, batch:snapshot.batch, country:snapshot.country, date:snapshot.date, capturedAt:snapshot.createdAt || '' }));
+    getStProcessingStatuses().forEach(status => rows.push({ source:'st', app:status.app, batch:status.batch, country:status.country, date:status.date, capturedAt:status.capturedAt || '', processStatus:status.status }));
+    return rows;
+  }
+
+  function scopedOverviewMetaRows(ignoreDate = false) {
+    let rows = overviewMetaRows();
+    if (overviewFilters.platform !== 'all') rows = rows.filter(item => item.source === overviewFilters.platform);
+    if (overviewFilters.app) rows = rows.filter(item => item.app === overviewFilters.app);
+    if (overviewFilters.batch) rows = rows.filter(item => item.batch === overviewFilters.batch);
+    if (overviewFilters.country) rows = rows.filter(item => item.country === overviewFilters.country);
+    if (!ignoreDate && overviewFilters.date) rows = rows.filter(item => item.date === overviewFilters.date);
+    return rows;
+  }
+
+  function setOverviewSelect(id, values, selected, allLabel) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.innerHTML = [`<option value="">${escapeHtml(allLabel)}</option>`]
+      .concat(values.map(value => `<option value="${encode(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(value)}</option>`)).join('');
+  }
+
+  function renderOverviewSelectors() {
+    const platformSelect = document.getElementById('overviewPlatformSelect');
+    if (platformSelect) platformSelect.value = overviewFilters.platform;
+    const sourceRows = overviewMetaRows().filter(item => overviewFilters.platform === 'all' || item.source === overviewFilters.platform);
+    const apps = [...new Set(sourceRows.map(item => item.app).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    if (overviewFilters.app && !apps.includes(overviewFilters.app)) overviewFilters.app = '';
+    setOverviewSelect('overviewAppSelect', apps, overviewFilters.app, '全部 App');
+    const appRows = overviewFilters.app ? sourceRows.filter(item => item.app === overviewFilters.app) : sourceRows;
+    const batches = [...new Set(appRows.map(item => item.batch).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    if (overviewFilters.batch && !batches.includes(overviewFilters.batch)) overviewFilters.batch = '';
+    setOverviewSelect('overviewBatchSelect', batches, overviewFilters.batch, '全部批次');
+    const batchRows = overviewFilters.batch ? appRows.filter(item => item.batch === overviewFilters.batch) : appRows;
+    const countries = [...new Set(batchRows.map(item => item.country).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    if (overviewFilters.country && !countries.includes(overviewFilters.country)) overviewFilters.country = '';
+    setOverviewSelect('overviewCountrySelect', countries, overviewFilters.country, '全部国家');
+    const countryRows = overviewFilters.country ? batchRows.filter(item => item.country === overviewFilters.country) : batchRows;
+    const dates = [...new Set(countryRows.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(b)-parseDate(a));
+    if (overviewFilters.date && !dates.includes(overviewFilters.date)) overviewFilters.date = '';
+    const dateSelect = document.getElementById('overviewDateSelect');
+    if (dateSelect) dateSelect.innerHTML = [`<option value="">最新数据</option>`].concat(dates.map(value => `<option value="${encode(value)}" ${value===overviewFilters.date?'selected':''}>${escapeHtml(value)}</option>`)).join('');
+    ['platform','app','batch','country','date'].forEach(key => localStorage.setItem(`aso_overview_${key}_v222`, overviewFilters[key] || (key==='platform'?'all':'')));
+  }
+
+  function groupOverviewSt(records) {
+    const map = new Map();
+    const statuses = getStProcessingStatuses();
+    const ensureGroup = (app,batch,country) => {
+      const key = ['st',app,batch,country].join('|');
+      if (!map.has(key)) map.set(key,{ source:'st', app, batch, country, records:[], statuses:[] });
+      return map.get(key);
+    };
+    records.forEach(item => {
+      const country = overviewCountryOfSt(item);
+      if (overviewFilters.app && item.App !== overviewFilters.app) return;
+      if (overviewFilters.batch && item.Batch !== overviewFilters.batch) return;
+      if (overviewFilters.country && country !== overviewFilters.country) return;
+      ensureGroup(item.App,item.Batch,country).records.push(item);
+    });
+    statuses.forEach(item => {
+      if (overviewFilters.app && item.app !== overviewFilters.app) return;
+      if (overviewFilters.batch && item.batch !== overviewFilters.batch) return;
+      if (overviewFilters.country && item.country !== overviewFilters.country) return;
+      ensureGroup(item.app,item.batch,item.country).statuses.push(item);
+    });
+    return [...map.values()].map(group => {
+      const rankDates = new Set(group.records.map(item=>item.Date).filter(Boolean));
+      const statusDates = new Set(group.statuses.filter(item=>['completed','completed_no_data','existing'].includes(item.status)).map(item=>item.date).filter(Boolean));
+      const allDates = [...new Set([...rankDates,...statusDates])].sort((a,b)=>parseDate(a)-parseDate(b));
+      const noDataDates = [...new Set(group.statuses.filter(item=>item.status==='completed_no_data' && !rankDates.has(item.date)).map(item=>item.date))];
+      const latestDate = overviewFilters.date || allDates[allDates.length-1] || '';
+      const keywordGroups = new Map();
+      group.records.forEach(item => {
+        const key = String(item.Keyword || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+        if (!keywordGroups.has(key)) keywordGroups.set(key, []);
+        keywordGroups.get(key).push(item);
+      });
+      let up=0, down=0, flat=0;
+      keywordGroups.forEach(items => {
+        const sorted = items.filter(item => !latestDate || parseDate(item.Date) <= parseDate(latestDate)).sort((a,b)=>parseDate(a.Date)-parseDate(b.Date));
+        const currentIndex = sorted.map(item=>item.Date).lastIndexOf(latestDate);
+        if (currentIndex < 0) return;
+        const current = sorted[currentIndex];
+        const previous = sorted.slice(0,currentIndex).reverse().find(item => Number.isFinite(Number(item.Rank)));
+        if (!previous) return;
+        const diff = Number(previous.Rank) - Number(current.Rank);
+        if (diff > 0) up += 1; else if (diff < 0) down += 1; else flat += 1;
+      });
+      const scopedRecords = overviewFilters.date ? group.records.filter(item=>item.Date===overviewFilters.date) : group.records;
+      const scopedStatuses = overviewFilters.date ? group.statuses.filter(item=>item.date===overviewFilters.date) : group.statuses;
+      return {
+        ...group, keywordCount:keywordGroups.size, up, down, flat, other:0, newCount:0,
+        noDataDays:noDataDates.length,
+        syncDays:overviewFilters.date ? ((scopedRecords.length||scopedStatuses.length)?1:0) : allDates.length,
+        latestDate,
+        lastSync:latestIsoValue([...group.records.map(item=>item.CapturedAt||''),...group.statuses.map(item=>item.capturedAt||'')]) || latestDate,
+        recordCount:scopedRecords.length + scopedStatuses.length
+      };
+    }).filter(group => !overviewFilters.date || group.recordCount > 0);
+  }
+
+  function overviewDirection(row) {
+    const status = String(row.rankChangeStatus || '').toLowerCase();
+    if (status === 'up') return 'up';
+    if (status === 'down' || status === 'dropped') return 'down';
+    if (status === 'new_entry') return 'new';
+    const text = String(row.rankChangeText || '');
+    if (/↑|上升|提升/.test(text)) return 'up';
+    if (/↓|下降|掉榜|落榜/.test(text)) return 'down';
+    return 'other';
+  }
+
+  function groupOverviewIos(source, snapshots) {
+    const map = new Map();
+    snapshots.forEach(snapshot => {
+      if (overviewFilters.app && snapshot.app !== overviewFilters.app) return;
+      if (overviewFilters.batch && snapshot.batch !== overviewFilters.batch) return;
+      if (overviewFilters.country && snapshot.country !== overviewFilters.country) return;
+      const key = [source,snapshot.app,snapshot.batch,snapshot.country].join('|');
+      if (!map.has(key)) map.set(key,{ source, app:snapshot.app, batch:snapshot.batch, country:snapshot.country, snapshots:[] });
+      map.get(key).snapshots.push(snapshot);
+    });
+    return [...map.values()].map(group => {
+      const allDates = [...new Set(group.snapshots.map(item=>item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
+      const latestDate = overviewFilters.date || allDates[allDates.length-1] || '';
+      const latestSnapshots = group.snapshots.filter(item=>item.date===latestDate);
+      const allRows = [...dedupeQimaiRows(group.snapshots,'rank_changed'), ...dedupeQimaiRows(group.snapshots,'new_entry')];
+      const keywordCount = new Set(allRows.map(item=>item.keywordNormalized)).size;
+      const changedRows = dedupeQimaiRows(latestSnapshots,'rank_changed');
+      const newRows = dedupeQimaiRows(latestSnapshots,'new_entry');
+      let up=0,down=0,other=0;
+      changedRows.forEach(row => { const direction=overviewDirection(row); if(direction==='up')up+=1; else if(direction==='down')down+=1; else other+=1; });
+      return {
+        ...group, keywordCount, up, down, flat:0, other, newCount:newRows.length,
+        syncDays:overviewFilters.date ? (latestSnapshots.length ? 1 : 0) : allDates.length,
+        latestDate, lastSync:latestIsoValue(group.snapshots.map(item=>item.createdAt || '')) || latestDate,
+        recordCount:changedRows.length + newRows.length
+      };
+    }).filter(group => !overviewFilters.date || group.recordCount > 0);
+  }
+
+  function getOverviewGroups() {
+    const groups=[];
+    if (overviewFilters.platform === 'all' || overviewFilters.platform === 'st') groups.push(...groupOverviewSt(normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY)||'[]',[]))));
+    if (overviewFilters.platform === 'all' || overviewFilters.platform === 'qimai') groups.push(...groupOverviewIos('qimai',getQimaiSnapshots()));
+    if (overviewFilters.platform === 'all' || overviewFilters.platform === 'diandian') groups.push(...groupOverviewIos('diandian',getDiandianSnapshots()));
+    return groups.sort((a,b)=>a.source.localeCompare(b.source)||a.app.localeCompare(b.app)||a.batch.localeCompare(b.batch));
+  }
+
+  function overviewOpenTarget(group) {
+    if (group.source === 'st') {
+      // 总览跳转必须同时同步“分组 → App → 批次”，否则旧分组会把目标 App 清空，
+      // 造成 01 LG / 100 Samsung 等账号在详情页无数据或串到其他 App。
+      selectedAppGroup = getAppGroup(group.app);
+      selectedApps = [group.app];
+      selectedBatches = group.batch ? [group.batch] : [];
+      selectedItems = [];
+      localStorage.setItem('selected_app_group', selectedAppGroup);
+      localStorage.setItem('selected_apps', JSON.stringify(selectedApps));
+      localStorage.setItem('selected_batches', JSON.stringify(selectedBatches));
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+      // 先按目标范围重建选择器和表格，再切换页面，避免旧 DOM 留下其他 App 的选项/数据。
+      renderDashboard();
+      showPage('stSection');
+      if (chart) setTimeout(() => chart.resize(), 50);
+      return;
+    }
+    if (group.source === 'qimai') {
+      iosFilters.app=group.app; iosFilters.batch=group.batch; iosFilters.country=group.country||''; iosFilters.date=overviewFilters.date||'';
+      localStorage.setItem('aso_ios_filter_app_v200',iosFilters.app); localStorage.setItem('aso_ios_filter_batch_v200',iosFilters.batch); localStorage.setItem('aso_ios_filter_country_v200',iosFilters.country); localStorage.setItem('aso_ios_filter_date_v200',iosFilters.date);
+      renderIosDashboard(); showPage('iosSection'); return;
+    }
+    ddFilters.app=group.app; ddFilters.batch=group.batch; ddFilters.country=group.country||''; ddFilters.date=overviewFilters.date||'';
+    renderDiandianDashboard(); showPage('diandianSection');
+  }
+
+  function renderOverview() {
+    renderOverviewSelectors();
+    const groups = getOverviewGroups();
+    const selectedMeta = scopedOverviewMetaRows(false);
+    const uniqueDates = new Set(selectedMeta.map(item=>item.date).filter(Boolean));
+    const sourceCount = new Set(groups.map(item=>item.source)).size;
+    const appCount = new Set(groups.map(item=>`${item.source}|${item.app}`)).size;
+    const keywordCount = groups.reduce((sum,item)=>sum+item.keywordCount,0);
+    const up = groups.reduce((sum,item)=>sum+item.up,0);
+    const down = groups.reduce((sum,item)=>sum+item.down,0);
+    const newCount = groups.reduce((sum,item)=>sum+item.newCount,0);
+    const latestDate = groups.map(item=>item.latestDate).filter(Boolean).sort((a,b)=>parseDate(b)-parseDate(a))[0] || '';
+    const lastSync = latestIsoValue(groups.map(item=>item.lastSync));
+    const scopeParts = [overviewFilters.platform==='all'?'全部平台':overviewPlatformName(overviewFilters.platform),overviewFilters.app||'全部 App',overviewFilters.batch||'全部批次',overviewFilters.country||'全部国家',overviewFilters.date||'最新数据'];
+
+    document.getElementById('metricOverviewKeywords').textContent = keywordCount.toLocaleString();
+    document.getElementById('metricOverviewKeywordsNote').textContent = `${appCount} 个 App 范围｜${sourceCount} 个平台`;
+    document.getElementById('metricOverviewUp').textContent = up.toLocaleString();
+    document.getElementById('metricOverviewUpNote').textContent = `各 App ${overviewFilters.date || '最新数据日'}`;
+    document.getElementById('metricOverviewDown').textContent = down.toLocaleString();
+    document.getElementById('metricOverviewDownNote').textContent = `各 App ${overviewFilters.date || '最新数据日'}`;
+    document.getElementById('metricOverviewNew').textContent = newCount.toLocaleString();
+    document.getElementById('metricOverviewNewNote').textContent = (overviewFilters.platform==='st')?'Sensor Tower 不适用':'七麦 / 点点新进榜';
+    document.getElementById('metricOverviewSyncDays').textContent = uniqueDates.size.toLocaleString();
+    document.getElementById('metricOverviewSyncDaysNote').textContent = `${appCount} 个 App｜按数据日期去重`;
+    document.getElementById('metricLastSync').textContent = formatDateTime(lastSync);
+    document.getElementById('metricLastSyncNote').textContent = '插件同步或手动导入的最近时间';
+    document.getElementById('overviewLatestDate').textContent = latestDate ? `最新数据 ${displayDate(latestDate)}` : '暂无同步';
+    document.getElementById('overviewScopeNote').textContent = `当前范围：${scopeParts.join(' / ')}`;
+    document.getElementById('latestSummaryScope').textContent = `${groups.length} 个 App / 批次`;
+
+    const sources = ['st','qimai','diandian'].filter(source=>overviewFilters.platform==='all'||overviewFilters.platform===source);
+    document.getElementById('overviewChangeSummary').innerHTML = sources.map(source => {
+      const sourceGroups=groups.filter(item=>item.source===source);
+      const totals={ keywords:sourceGroups.reduce((s,i)=>s+i.keywordCount,0),up:sourceGroups.reduce((s,i)=>s+i.up,0),down:sourceGroups.reduce((s,i)=>s+i.down,0),newCount:sourceGroups.reduce((s,i)=>s+i.newCount,0) };
+      const rows=sourceGroups.length?sourceGroups.map((item,index)=>`<div class="overview-app-row" data-overview-index="${encode(`${source}|${item.app}|${item.batch}|${item.country}`)}"><div><div class="overview-app-name">${escapeHtml(item.app)}</div><div class="overview-app-meta">${escapeHtml(displayBatch(item.batch) || '未命名批次')}</div></div><div class="overview-app-meta">${escapeHtml(item.country || '未标注国家')}</div><div class="overview-app-meta">同步 ${item.syncDays} 天<br>最新 ${escapeHtml(displayDate(item.latestDate || ''))}</div><div class="overview-app-metrics"><span class="overview-mini-chip">关键词 ${item.keywordCount}</span><span class="overview-mini-chip up">上涨 ${item.up}</span><span class="overview-mini-chip down">下降 ${item.down}</span>${source==='st'?`<span class="overview-mini-chip">不变 ${item.flat}</span>${item.noDataDays?`<span class="overview-mini-chip">无排名 ${item.noDataDays}天</span>`:''}`:`<span class="overview-mini-chip new">新进榜 ${item.newCount}</span>${item.other?`<span class="overview-mini-chip">其他变动 ${item.other}</span>`:''}`}</div><button type="button" class="overview-open-btn" data-source="${source}" data-app="${encode(item.app)}" data-batch="${encode(item.batch)}" data-country="${encode(item.country||'')}">查看</button></div>`).join(''):`<div class="overview-empty">暂无${escapeHtml(overviewPlatformName(source))}数据</div>`;
+      return `<div class="overview-platform-block"><div class="overview-platform-header"><div class="overview-platform-title">${escapeHtml(overviewPlatformName(source))}</div><div class="overview-platform-total">关键词 ${totals.keywords}｜上涨 ${totals.up}｜下降 ${totals.down}${source==='st'?'':`｜新进榜 ${totals.newCount}`}</div></div><div class="overview-app-list">${rows}</div></div>`;
+    }).join('');
+
+    document.querySelectorAll('.overview-open-btn').forEach(button=>button.addEventListener('click',()=>{
+      const source=button.dataset.source, app=decode(button.dataset.app), batch=decode(button.dataset.batch), country=decode(button.dataset.country||'');
+      const group=groups.find(item=>item.source===source&&item.app===app&&item.batch===batch&&(item.country||'')===country);
+      if(group) overviewOpenTarget(group);
+    }));
+
+    document.getElementById('overviewSourceStatus').innerHTML = groups.length ? groups.map(item => {
+      const status = item.source==='st' && item.noDataDays ? `正常｜无排名 ${item.noDataDays} 天` : (item.latestDate ? '正常' : '暂无排名数据');
+      return `<tr><td>${escapeHtml(overviewPlatformName(item.source))}</td><td><b>${escapeHtml(item.app)}</b><br><span class="overview-app-meta">${escapeHtml(displayBatch(item.batch)||'—')}</span></td><td>${escapeHtml(item.country||'—')}</td><td>${item.syncDays} 天</td><td>${escapeHtml(displayDate(item.latestDate)||'—')}</td><td>${escapeHtml(formatDateTime(item.lastSync))}</td><td><span class="status-pill ${item.latestDate?'ok':'warn'}">${escapeHtml(status)}</span></td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="overview-empty">当前筛选范围暂无数据</td></tr>`;
+  }
+
+  function showPage(pageId) {
+    const valid = ['overviewSection','stSection','iosSection','diandianSection','crossSection','dataSection'];
+    activePage = valid.includes(pageId) ? pageId : 'overviewSection';
+    localStorage.setItem('aso_active_page_v200', activePage);
+    document.querySelectorAll('.page-section').forEach(section => section.classList.toggle('active', section.id === activePage));
+    document.querySelectorAll('.nav-btn').forEach(button => button.classList.toggle('active', button.dataset.page === activePage));
+    if (activePage === 'stSection' && chart) setTimeout(() => {
+      chart.resize();
+      updateChart(lastStChartData);
+    }, 30);
+    if (activePage === 'iosSection') renderIosDashboard();
+    if (activePage === 'diandianSection') renderDiandianDashboard();
+    if (activePage === 'crossSection') renderCrossValidation();
+    if (activePage === 'overviewSection') renderOverview();
+    if (activePage === 'dataSection') renderStorageSummary();
+  }
+
+  function exportUnifiedData() {
+    const payload = {
+      version:DASHBOARD_VERSION, exportedAt:new Date().toISOString(),
+      st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()), processingStatuses:getStProcessingStatuses() },
+      qimai:{ snapshots:getQimaiSnapshots() }, diandian:{ snapshots:getDiandianSnapshots() }, syncLogs:getSyncLogs()
+    };
+    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }), `aso-data-center-backup-${new Date().toISOString().slice(0,10)}.json`);
+  }
+
+  function importUnifiedData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.st?.data) mergeIncomingData(parsed.st.data);
+        else if (Array.isArray(parsed.data)) mergeIncomingData(parsed.data);
+        if (parsed.st?.notes) mergeIncomingNotes(parsed.st.notes);
+        else if (Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
+        if (Array.isArray(parsed.st?.processingStatuses)) saveStProcessingStatuses([...getStProcessingStatuses(), ...parsed.st.processingStatuses]);
+        if (parsed.qimai?.snapshots || parsed.qimaiState) mergeQimaiPayload(parsed.qimai || parsed, 'import');
+        if (parsed.diandian?.snapshots || parsed.diandianState) mergeDiandianPayload(parsed.diandian || parsed, 'import');
+        if (Array.isArray(parsed.syncLogs)) localStorage.setItem(SYNC_LOG_KEY, JSON.stringify([...parsed.syncLogs, ...getSyncLogs()].slice(0,200)));
+        renderDashboard(); renderIosDashboard(); renderDiandianDashboard(); renderCrossValidation(); renderOverview(); renderStorageSummary();
+        alert('统一备份导入完成，原数据未删除。');
+      } catch (error) { alert(`导入失败：${error.message}`); }
+    };
+    reader.readAsText(file);
+  }
+
+  function importQimaiFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const count = mergeQimaiPayload(parsed, 'import');
+        renderIosDashboard(); renderOverview(); renderStorageSummary();
+        alert(`已合并 ${count} 个七麦快照。`);
+      } catch (error) { alert(`七麦数据导入失败：${error.message}`); }
+    };
+    reader.readAsText(file);
+  }
+
+  async function exportIosExcel() {
+    if (!window.ExcelJS) return alert('ExcelJS 尚未加载，请检查网络后重试。');
+    const snapshots = getQimaiSnapshots();
+    if (!snapshots.length) return alert('暂无 iOS 七麦数据。');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ASO 数据中心';
+    const categories = [
+      ['相关词_排名变动','rank_changed'], ['相关词_新进榜','new_entry']
+    ];
+    categories.forEach(([sheetName, category]) => {
+      const sheet = workbook.addWorksheet(sheetName, { views:[{state:'frozen',ySplit:1}] });
+      sheet.columns = [
+        {header:'日期',key:'date',width:13},{header:'App',key:'app',width:24},{header:'App Store ID',key:'appStoreId',width:15},{header:'批次',key:'batch',width:18},{header:'国家',key:'country',width:9},
+        {header:'关键词',key:'keyword',width:28},{header:'来源词',key:'sourceKeywords',width:30},{header:'排名',key:'rank',width:10},{header:'排名变动',key:'rankChangeText',width:13},
+        {header:'指数',key:'index',width:11},{header:'结果数',key:'resultCount',width:13},{header:'流行度',key:'popularity',width:11},{header:'首次发现',key:'firstSeenDate',width:13},{header:'出现天数',key:'occurrenceDays',width:11},{header:'最佳排名',key:'bestRank',width:11}
+      ];
+      const rows = dedupeQimaiRows(snapshots, category).sort((a,b)=>(b.resultCount??-Infinity)-(a.resultCount??-Infinity));
+      rows.forEach(row => { const stats=getQimaiTimelineStats(snapshots,row); sheet.addRow({...row,sourceKeywords:row.sourceKeywords.join(', '),firstSeenDate:stats.firstSeenDate,occurrenceDays:stats.occurrenceDays,bestRank:stats.bestRank}); });
+      const header=sheet.getRow(1); header.font={bold:true,color:{argb:'FFFFFFFF'}}; header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4299E1'}}; header.alignment={vertical:'middle',horizontal:'center'};
+      sheet.autoFilter={from:'A1',to:'O1'};
+    });
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadBlob(new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `iOS七麦关键词追踪_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  function renderStorageSummary() {
+    const st = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const snapshots = getQimaiSnapshots();
+    const ddSnapshots = getDiandianSnapshots();
+    const changedCount = dedupeQimaiRows(snapshots,'rank_changed').length;
+    const newCount = dedupeQimaiRows(snapshots,'new_entry').length;
+    const ddChangedCount = dedupeQimaiRows(ddSnapshots,'rank_changed').length;
+    const ddNewCount = dedupeQimaiRows(ddSnapshots,'new_entry').length;
+    const logs = getSyncLogs();
+    const stStatuses = getStProcessingStatuses();
+    const noDataCount = stStatuses.filter(item=>item.status==='completed_no_data').length;
+    const rows = [
+      ['Sensor Tower', `${st.length.toLocaleString()} 条原始排名记录`, MASTER_KEY],
+      ['ST 处理状态', `${stStatuses.length.toLocaleString()} 个日期状态｜无排名 ${noDataCount}`, ST_STATUS_KEY],
+      ['iOS 七麦快照', `${snapshots.length.toLocaleString()} 个日期快照`, QIMAI_KEY],
+      ['iOS 排名变动', `${changedCount.toLocaleString()} 条跨日期去重记录`, 'rank_changed'],
+      ['iOS 新进榜', `${newCount.toLocaleString()} 条跨日期去重记录`, 'new_entry'],
+      ['iOS 点点快照', `${ddSnapshots.length.toLocaleString()} 个日期快照`, DIANDIAN_KEY],
+      ['点点排名变动', `${ddChangedCount.toLocaleString()} 条跨日期去重记录`, 'diandian_rank_changed'],
+      ['点点新进榜', `${ddNewCount.toLocaleString()} 条跨日期去重记录`, 'diandian_new_entry'],
+      ['同步日志', `${logs.length.toLocaleString()} 条`, SYNC_LOG_KEY]
+    ];
+    document.getElementById('storageSummary').innerHTML = rows.map(([name,note,key]) => `<div class="storage-row"><div class="storage-key">${name}</div><div class="storage-note">${note}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('');
+  }
+
+
+  // ---------------- iOS 点点与交叉验证 ----------------
+  function getDiandianSnapshots() {
+    const parsed = safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed.map(normalizeDiandianSnapshot).filter(Boolean) : [];
+  }
+
+  function saveDiandianSnapshots(snapshots) {
+    const map = new Map();
+    (snapshots || []).map(normalizeDiandianSnapshot).filter(Boolean).forEach(snapshot => {
+      const key = diandianSnapshotKey(snapshot);
+      map.set(key, map.has(key) ? mergeIosSnapshotRecords(map.get(key), snapshot) : snapshot);
+    });
+    const sorted = [...map.values()].sort((a,b) => (parseDate(b.date)?.getTime() || 0) - (parseDate(a.date)?.getTime() || 0));
+    localStorage.setItem(DIANDIAN_KEY, JSON.stringify(sorted));
+  }
+
+  function diandianSnapshotKey(snapshot) {
+    return ['diandian_ios', canonicalIosAppIdentity(snapshot), snapshot.batch, snapshot.country, snapshot.date]
+      .map(value => String(value || '').trim().toLowerCase()).join('__');
+  }
+
+  function normalizeDiandianSnapshot(snapshot) {
+    const normalized = normalizeQimaiSnapshot(snapshot);
+    if (!normalized) return null;
+    normalized.source = 'diandian_ios';
+    normalized.changedResults = normalized.changedResults.map((row,index) => ({
+      ...row,
+      source:'diandian_ios',
+      keywordUpdatedAt: snapshot.changedResults?.[index]?.keywordUpdatedAt || ''
+    }));
+    normalized.newEntryResults = normalized.newEntryResults.map((row,index) => ({
+      ...row,
+      source:'diandian_ios',
+      keywordUpdatedAt: snapshot.newEntryResults?.[index]?.keywordUpdatedAt || ''
+    }));
+    return normalized;
+  }
+
+  function extractDiandianSnapshots(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.snapshots)) return payload.snapshots;
+    if (payload.snapshot) return [payload.snapshot];
+    if (payload.diandianState) {
+      const state = payload.diandianState;
+      return [{
+        app:state.config?.app, appStoreId:state.config?.appStoreId, batch:state.config?.batch,
+        country:state.config?.country, date:state.config?.currentDate, compareDate:state.config?.compareDate,
+        day:state.config?.autoDay, status:state.status, changedResults:state.changedResults,
+        newEntryResults:state.newEntryResults, failures:state.failures, createdAt:state.completedAt || new Date().toISOString()
+      }];
+    }
+    if (payload.changedResults || payload.newEntryResults) return [payload];
+    return [];
+  }
+
+  function mergeDiandianPayload(payload, origin = 'import') {
+    const incoming = extractDiandianSnapshots(payload).map(normalizeDiandianSnapshot).filter(Boolean);
+    if (!incoming.length) throw new Error('数据中没有可识别的点点快照。');
+    const map = new Map(getDiandianSnapshots().map(item => [diandianSnapshotKey(item), item]));
+    incoming.forEach(item => map.set(diandianSnapshotKey(item), item));
+    saveDiandianSnapshots([...map.values()]);
+    const originLabel = origin === 'plugin_direct' ? '插件自动同步' : origin === 'plugin_url' ? '插件兼容同步' : '导入';
+    addSyncLog({ source:'diandian_ios', status:'success', message:`${originLabel} ${incoming.length} 个点点快照。` });
+    return incoming.length;
+  }
+
+  function getFilteredDiandianRows() {
+    let rows = dedupeQimaiRows(getDiandianSnapshots(), ddCategory);
+    if (ddFilters.app) rows = rows.filter(item => item.app === ddFilters.app);
+    if (ddFilters.batch) rows = rows.filter(item => item.batch === ddFilters.batch);
+    if (ddFilters.country) rows = rows.filter(item => item.country === ddFilters.country);
+    if (ddFilters.date) rows = rows.filter(item => item.date === ddFilters.date);
+    const sourceQuery = ddFilters.source.trim().toLowerCase();
+    if (sourceQuery) rows = rows.filter(item => item.sourceKeywords.some(source => source.toLowerCase().includes(sourceQuery)));
+    const keywordQuery = ddFilters.keyword.trim().toLowerCase();
+    if (keywordQuery) rows = rows.filter(item => item.keyword.toLowerCase().includes(keywordQuery));
+    return rows;
+  }
+
+  function fillSelect(id, values, current, allLabel) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    const options = [`<option value="">${escapeHtml(allLabel)}</option>`].concat(values.map(value => `<option value="${encode(value)}" ${value===current?'selected':''}>${escapeHtml(value)}</option>`));
+    element.innerHTML = options.join('');
+  }
+
+  function renderDiandianSelectors() {
+    const snapshots = getDiandianSnapshots();
+    const apps = [...new Set(snapshots.map(item => item.app))].sort();
+    if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
+    fillSelect('ddAppSelect', apps, ddFilters.app, '全部 App');
+    const scopedApp = ddFilters.app ? snapshots.filter(item => item.app === ddFilters.app) : snapshots;
+    const batches = [...new Set(scopedApp.map(item => item.batch))].sort();
+    if (ddFilters.batch && !batches.includes(ddFilters.batch)) ddFilters.batch = '';
+    fillSelect('ddBatchSelect', batches, ddFilters.batch, '全部批次');
+    const scopedBatch = ddFilters.batch ? scopedApp.filter(item => item.batch === ddFilters.batch) : scopedApp;
+    const countries = [...new Set(scopedBatch.map(item => item.country))].sort();
+    if (ddFilters.country && !countries.includes(ddFilters.country)) ddFilters.country = '';
+    fillSelect('ddCountrySelect', countries, ddFilters.country, '全部国家');
+    const scopedCountry = ddFilters.country ? scopedBatch.filter(item => item.country === ddFilters.country) : scopedBatch;
+    const dates = [...new Set(scopedCountry.map(item => item.date))].sort((a,b)=>parseDate(b)-parseDate(a));
+    if (ddFilters.date && !dates.includes(ddFilters.date)) ddFilters.date = '';
+    fillSelect('ddDateSelect', dates, ddFilters.date, '全部日期');
+  }
+
+  function renderDiandianHistoryChips(history, category) {
+    const items = [...(history || [])].slice(-5);
+    return `<div class="ios-history-chips">${items.map(item => {
+      const status = category === 'new_entry' ? '新进榜' : (item.rankChangeText || '—');
+      return `<span class="ios-history-chip"><b>${escapeHtml(String(item.date || '').slice(5))}</b><span class="${rankChangeClass(item.rankChangeStatus)}">${escapeHtml(status)}</span><span>指数 ${displayNumber(item.index)}</span></span>`;
+    }).join('')}</div>`;
+  }
+
+  function diandianTrendEntityKey(row) {
+    return iosKeywordEntityKey(row);
+  }
+
+  function renderDiandianTrend(rows = ddCurrentRows) {
+    const empty = document.getElementById('ddTrendEmpty');
+    const chartEl = document.getElementById('ddTrendChart');
+    const clearBtn = document.getElementById('ddTrendClearBtn');
+    const title = document.getElementById('ddTrendTitle');
+    const selected = (rows || []).find(row => diandianTrendEntityKey(row) === ddSelectedTrendKey);
+    if (!selected) {
+      ddSelectedTrendKey = '';
+      empty?.classList.remove('hidden');
+      chartEl?.classList.add('hidden');
+      clearBtn?.classList.add('hidden');
+      if (title) title.textContent = '关键词排名趋势';
+      if (ddTrendChart) ddTrendChart.clear();
+      return;
+    }
+    const history = [...(selected.history || [])].sort((a,b) => parseDate(a.date) - parseDate(b.date));
+    const dates = [...new Set(history.map(item => item.date).filter(Boolean))];
+    const rankByDate = {};
+    history.forEach(item => { if (Number.isFinite(item.rank)) rankByDate[item.date] = item.rank; });
+    if (title) title.textContent = `${selected.keyword}｜排名趋势`;
+    empty?.classList.add('hidden');
+    chartEl?.classList.remove('hidden');
+    clearBtn?.classList.remove('hidden');
+    if (!window.echarts || !chartEl) return;
+    if (!ddTrendChart) ddTrendChart = echarts.init(chartEl);
+    ddTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ data:['点点排名'] },
+      grid:{ left:48,right:24,top:48,bottom:44,containLabel:true },
+      xAxis:buildAdaptiveDateAxis(dates, { chartWidth:chartEl?.clientWidth || 1200, boundaryGap:false }),
+      yAxis:{ type:'value',inverse:true,nameLocation: 'start',min:1,name:'排名（越小越好）' },
+      series:[{ name:'点点排名',type:'line',connectNulls:false,smooth:false,symbol:'circle',symbolSize:8,data:dates.map(date => rankByDate[date] ?? null) }]
+    }, true);
+    setTimeout(() => ddTrendChart.resize(), 30);
+  }
+
+  function renderDiandianDashboard() {
+    renderDiandianSelectors();
+    updateIosTaskDeleteButtons();
+    document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
+    const rawRows = getFilteredDiandianRows();
+    let rows = groupQimaiRowsByKeyword(rawRows);
+    rows = sortIndexRows(rows, ddIndexSort);
+    document.getElementById('ddRecordBadge').textContent = `${rows.length} 个关键词`;
+    document.getElementById('ddEmpty').classList.toggle('hidden', rows.length > 0);
+    document.getElementById('ddTableWrap').classList.toggle('hidden', rows.length === 0);
+    const latestDate = rawRows.map(item => item.date).sort((a,b)=>parseDate(b)-parseDate(a))[0] || '—';
+    const uniqueSources = new Set(rows.flatMap(item => item.sourceKeywords));
+    document.getElementById('ddSummaryLine').innerHTML = [
+      `当前类型：${ddCategory === 'new_entry' ? '相关词＋新进榜' : '相关词＋排名变动'}`,
+      `关键词：${rows.length}`, `历史记录：${rawRows.length}`, `来源词：${uniqueSources.size}`, `最新日期：${latestDate}`, formatIosIndexThreshold(), '按搜索指数降序'
+    ].map(text => `<span class="summary-chip">${escapeHtml(text)}</span>`).join('');
+    document.getElementById('ddTableHead').innerHTML = `<tr><th>关键词</th><th>来源词</th><th>最新抓取日期</th><th>${ddCategory==='new_entry'?'最新状态':'最新排名变动'}</th><th>${sortButtonHtml('diandian', ddIndexSort)}</th><th>最新排名</th><th>历史追踪</th></tr>`;
+    document.querySelector('[data-index-sort="diandian"]')?.addEventListener('click', () => {
+      ddIndexSort = ddIndexSort === 'desc' ? 'asc' : 'desc';
+      localStorage.setItem('aso_dd_index_sort_v225', ddIndexSort);
+      renderDiandianDashboard();
+    });
+    ddCurrentRows = rows;
+    document.getElementById('ddTableBody').innerHTML = rows.slice(0,1000).map((row,index) => `<tr>
+      <td class="ios-keyword-main"><button class="keyword-link dd-keyword-trend ${diandianTrendEntityKey(row) === ddSelectedTrendKey ? 'trend-selected' : ''}" data-row-index="${index}" title="点击显示排名曲线">${escapeHtml(row.keyword)}</button></td>
+      <td>${renderIosSourceChips(row.sourceKeywords)}</td>
+      <td class="ios-latest-date">${escapeHtml(displayDate(row.latestDate || row.date || ''))}</td>
+      <td class="ios-latest-metric ${rankChangeClass(row.rankChangeStatus)}">${escapeHtml(ddCategory==='new_entry'?'新进榜':(row.rankChangeText||'—'))}</td>
+      <td class="ios-latest-metric">${displayNumber(row.index)}</td>
+      <td>${displayNumber(row.rank)}</td>
+      <td>${renderDiandianHistoryChips(row.history, ddCategory)}</td>
+    </tr>`).join('');
+    document.querySelectorAll('.dd-keyword-trend').forEach(button => button.addEventListener('click', () => {
+      const row = rows[Number(button.dataset.rowIndex)];
+      if (!row) return;
+      const key = diandianTrendEntityKey(row);
+      const willSelect = ddSelectedTrendKey !== key;
+      ddSelectedTrendKey = willSelect ? key : '';
+      renderDiandianDashboard();
+      if (willSelect) {
+        requestAnimationFrame(() => document.getElementById('ddTrendPanel')?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      }
+    }));
+    renderDiandianTrend(rows);
+    renderCrossValidation();
+    renderStorageSummary();
+  }
+
+  function normalizeCrossAppIdentity(row) {
+    const app = String(row?.app || '').normalize('NFKC')
+      .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '')
+      .trim();
+    const appStoreId = String(row?.appStoreId || '').replace(/\D/g, '');
+    return app || appStoreId;
+  }
+
+  function normalizeCrossKeyword(value) {
+    return String(value || '').normalize('NFKC')
+      .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function crossEntityKey(row) {
+    const keyword = normalizeCrossKeyword(row?.keywordNormalized || row?.keyword);
+    if (!keyword) return '';
+    // 选择具体 App 后，仅按关键词做跨来源合并，避免 App 名、ID 或隐藏字符差异导致重复。
+    if (crossFilters.app) return keyword;
+    return [normalizeCrossAppIdentity(row), keyword].join('|');
+  }
+
+  function getCrossSourceRows(snapshots) {
+    return [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
+      .map(row => ({ ...row, keywordNormalized: normalizeCrossKeyword(row.keywordNormalized || row.keyword) }))
+      .filter(row => row.keywordNormalized);
+  }
+
+  function crossRowMatchesFilters(row) {
+    if (crossFilters.app && row.app !== crossFilters.app) return false;
+    if (crossFilters.batch && row.batch !== crossFilters.batch) return false;
+    if (crossFilters.country && row.country !== crossFilters.country) return false;
+    return true;
+  }
+
+  function crossRowTime(row) {
+    return parseDate(row.latestDate || row.date)?.getTime() || parseDate(row.capturedAt)?.getTime() || 0;
+  }
+
+  function latestSourceKeywordRows(rows) {
+    const map = new Map();
+    (rows || []).forEach(row => {
+      const key = crossEntityKey(row);
+      if (!key) return;
+      const current = map.get(key);
+      if (!current || crossRowTime(row) > crossRowTime(current) || (
+        crossRowTime(row) === crossRowTime(current) && String(row.capturedAt || '') > String(current.capturedAt || '')
+      )) {
+        map.set(key, row);
+      }
+    });
+    return map;
+  }
+
+  function directionOf(row) {
+    if (!row) return 'none';
+    if (row.rankChangeStatus === 'new_entry') return 'new';
+    if (row.rankChangeStatus === 'up') return 'up';
+    if (row.rankChangeStatus === 'down' || row.rankChangeStatus === 'dropped') return 'down';
+    return 'changed';
+  }
+
+  function getCrossConclusion(item) {
+    const qDir = directionOf(item.q), dDir = directionOf(item.d);
+    const contextMismatch = item.q && item.d && (
+      String(item.q.batch || '') !== String(item.d.batch || '') ||
+      String(item.q.country || '') !== String(item.d.country || '')
+    );
+    if (item.q && item.d && contextMismatch) return '双方均发现；请选择相同批次/国家进一步验证';
+    if (item.q && item.d && qDir === dDir) return '高可信：双方方向一致';
+    if (item.q && item.d) return '中可信：双方均发现但方向不同';
+    return '待观察';
+  }
+
+  function crossRowDate(row) {
+    return toDateKey(row?.latestDate || row?.date || row?.currentDate || '');
+  }
+
+  function buildCrossTrendSeries(rows, sourceLabel, selectedKey) {
+    const groups = new Map();
+    (rows || []).filter(crossRowMatchesFilters).forEach(row => {
+      if (crossEntityKey(row) !== selectedKey || !Number.isFinite(row.rank)) return;
+      const contextKey = [String(row.batch || ''), String(row.country || '')].join('|');
+      if (!groups.has(contextKey)) groups.set(contextKey, { batch:row.batch || '', country:row.country || '', dates:new Map() });
+      const group = groups.get(contextKey);
+      const date = crossRowDate(row);
+      if (!date) return;
+      const current = group.dates.get(date);
+      if (!current || String(row.capturedAt || '') >= String(current.capturedAt || '')) group.dates.set(date, row);
+    });
+    return [...groups.values()].map(group => {
+      const suffix = [group.batch, group.country].filter(Boolean).join(' · ');
+      return {
+        name: suffix ? `${sourceLabel} · ${suffix}` : sourceLabel,
+        values: group.dates
+      };
+    });
+  }
+
+  function renderCrossTrend(qAllRows, dAllRows, visibleRows) {
+    const panel = document.getElementById('crossTrendPanel');
+    const selected = (visibleRows || []).find(item => item.key === crossSelectedKey);
+    if (!selected || !window.echarts) {
+      panel?.classList.add('hidden');
+      if (crossTrendChart) crossTrendChart.clear();
+      if (crossSelectedKey && !selected) crossSelectedKey = '';
+      return;
+    }
+    const qSeries = buildCrossTrendSeries(qAllRows, '七麦', crossSelectedKey);
+    const dSeries = buildCrossTrendSeries(dAllRows, '点点', crossSelectedKey);
+    const seriesDefs = [...qSeries, ...dSeries];
+    const dateSet = new Set();
+    seriesDefs.forEach(series => series.values.forEach((_, date) => dateSet.add(date)));
+    const dates = [...dateSet].sort();
+    panel.classList.remove('hidden');
+    const keyword = selected.q?.keyword || selected.d?.keyword || '关键词';
+    document.getElementById('crossTrendTitle').textContent = `${keyword}｜排名趋势`;
+    const context = [crossFilters.app || '全部 App', crossFilters.batch || '全部批次', crossFilters.country || '全部国家'].join(' · ');
+    document.getElementById('crossTrendContext').textContent = `${context}；排名数字越小越好。点击其他关键词可切换曲线，当前筛选不会改变。`;
+    if (!crossTrendChart) crossTrendChart = echarts.init(document.getElementById('crossTrendChart'));
+    crossTrendChart.setOption({
+      tooltip:{ trigger:'axis' },
+      legend:{ type:'scroll', top:0 },
+      grid:{ left:58, right:28, top:52, bottom:48 },
+      xAxis:buildAdaptiveDateAxis(dates, { chartWidth:document.getElementById('crossTrendChart')?.clientWidth || 1200, boundaryGap:false }),
+      yAxis:{ type:'value', inverse:true, nameLocation: 'start', min:1, name:'排名' },
+      series:seriesDefs.map(def => ({
+        name:def.name,
+        type:'line',
+        smooth:false,
+        connectNulls:true,
+        symbol:'circle',
+        symbolSize:7,
+        data:dates.map(date => def.values.get(date)?.rank ?? null)
+      }))
+    }, true);
+    setTimeout(() => crossTrendChart.resize(), 30);
+  }
+
+  function crossExportValue(row, key) {
+    const value = row?.[key];
+    return value === null || value === undefined ? '' : value;
+  }
+
+  async function exportCrossValidationExcel(onlyBoth = false) {
+    if (!window.ExcelJS) return alert('ExcelJS 尚未加载，请检查网络后重试。');
+    const rows = (crossCurrentRows || []).filter(item => !onlyBoth || (item.q && item.d));
+    if (!rows.length) return alert(onlyBoth ? '当前筛选下没有双方都有的关键词。' : '当前筛选下没有可导出的数据。');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ASO 数据中心';
+    const sheet = workbook.addWorksheet(onlyBoth ? '双方都有' : '当前全部', { views:[{state:'frozen',ySplit:1}] });
+    sheet.columns = [
+      {header:'关键词',key:'keyword',width:30},
+      {header:'App',key:'app',width:24},
+      {header:'国家',key:'country',width:10},
+      {header:'七麦批次',key:'qBatch',width:18},
+      {header:'点点批次',key:'dBatch',width:18},
+      {header:'七麦最新日期',key:'qDate',width:14},
+      {header:'点点最新日期',key:'dDate',width:14},
+      {header:'七麦排名',key:'qRank',width:11},
+      {header:'七麦排名变动',key:'qChange',width:15},
+      {header:'七麦指数',key:'qIndex',width:12},
+      {header:'点点排名',key:'dRank',width:11},
+      {header:'点点排名变动',key:'dChange',width:15},
+      {header:'点点指数',key:'dIndex',width:12},
+      {header:'验证结论',key:'conclusion',width:38}
+    ];
+    rows.forEach(item => sheet.addRow({
+      keyword:item.q?.keyword || item.d?.keyword || '',
+      app:item.q?.app || item.d?.app || '',
+      country:item.q?.country || item.d?.country || '',
+      qBatch:crossExportValue(item.q,'batch'),
+      dBatch:crossExportValue(item.d,'batch'),
+      qDate:crossRowDate(item.q),
+      dDate:crossRowDate(item.d),
+      qRank:crossExportValue(item.q,'rank'),
+      qChange:crossExportValue(item.q,'rankChangeText'),
+      qIndex:crossExportValue(item.q,'index'),
+      dRank:crossExportValue(item.d,'rank'),
+      dChange:crossExportValue(item.d,'rankChangeText'),
+      dIndex:crossExportValue(item.d,'index'),
+      conclusion:getCrossConclusion(item)
+    }));
+    const header = sheet.getRow(1);
+    header.font={bold:true,color:{argb:'FFFFFFFF'}};
+    header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4299E1'}};
+    header.alignment={vertical:'middle',horizontal:'center'};
+    sheet.autoFilter={from:'A1',to:'N1'};
+    const filterSheet = workbook.addWorksheet('筛选条件');
+    filterSheet.columns=[{header:'条件',key:'label',width:18},{header:'当前值',key:'value',width:32}];
+    [
+      ['导出范围',onlyBoth?'双方都有':'当前全部'],
+      ['App',crossFilters.app||'全部 App'],
+      ['测试批次',crossFilters.batch||'全部批次'],
+      ['国家',crossFilters.country||'全部国家'],
+      ['关键词搜索',crossFilters.keyword||'无'],
+      ['指数门槛',`≥ ${IOS_MIN_INDEX}`],
+      ['导出时间',new Date().toLocaleString()]
+    ].forEach(([label,value])=>filterSheet.addRow({label,value}));
+    const fh=filterSheet.getRow(1); fh.font={bold:true,color:{argb:'FFFFFFFF'}}; fh.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF718096'}};
+    const buffer = await workbook.xlsx.writeBuffer();
+    const scope = onlyBoth ? '双方都有' : '当前全部';
+    downloadBlob(new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `iOS关键词交叉验证_${scope}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  function renderCrossValidation() {
+    const qAllRows = getCrossSourceRows(getQimaiSnapshots());
+    const dAllRows = getCrossSourceRows(getDiandianSnapshots());
+    const allRows = [...qAllRows, ...dAllRows];
+
+    const apps = [...new Set(allRows.map(item => item.app).filter(Boolean))].sort();
+    if (crossFilters.app && !apps.includes(crossFilters.app)) crossFilters.app = '';
+    fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
+
+    const appScoped = crossFilters.app ? allRows.filter(item => item.app === crossFilters.app) : allRows;
+    const batches = [...new Set(appScoped.map(item => item.batch).filter(Boolean))].sort();
+    if (crossFilters.batch && !batches.includes(crossFilters.batch)) crossFilters.batch = '';
+    fillSelect('crossBatchSelect', batches, crossFilters.batch, '全部批次');
+
+    const batchScoped = crossFilters.batch ? appScoped.filter(item => item.batch === crossFilters.batch) : appScoped;
+    const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
+    if (crossFilters.country && !countries.includes(crossFilters.country)) crossFilters.country = '';
+    fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
+
+    const qMap = latestSourceKeywordRows(qAllRows.filter(crossRowMatchesFilters));
+    const dMap = latestSourceKeywordRows(dAllRows.filter(crossRowMatchesFilters));
+    const keys = new Set([...qMap.keys(), ...dMap.keys()]);
+    let rows = [...keys].map(key => ({ key, q:qMap.get(key)||null, d:dMap.get(key)||null }));
+
+    const keywordQuery = normalizeCrossKeyword(crossFilters.keyword);
+    if (keywordQuery) rows = rows.filter(item => normalizeCrossKeyword(item.q?.keyword || item.d?.keyword).includes(keywordQuery));
+
+    const high = rows.filter(item => item.q && item.d && directionOf(item.q) === directionOf(item.d)).length;
+    const both = rows.filter(item => item.q && item.d).length;
+    document.getElementById('crossRecordBadge').textContent = `${rows.length} 个关键词`;
+    document.getElementById('crossSummaryLine').innerHTML = [
+      `双方都有：${both}`,
+      `方向一致：${high}`,
+      `仅七麦：${rows.filter(i=>i.q&&!i.d).length}`,
+      `仅点点：${rows.filter(i=>!i.q&&i.d).length}`,
+      formatIosIndexThreshold(),
+      '同一关键词已合并'
+    ].map(text=>`<span class="summary-chip">${text}</span>`).join('');
+    document.getElementById('crossEmpty').classList.toggle('hidden', rows.length > 0);
+    document.getElementById('crossTableWrap').classList.toggle('hidden', rows.length === 0);
+
+    rows.sort((a,b) => {
+      const bothA = a.q && a.d ? 1 : 0;
+      const bothB = b.q && b.d ? 1 : 0;
+      if (bothA !== bothB) return bothB - bothA;
+      const indexA = Math.max(Number(a.q?.index) || 0, Number(a.d?.index) || 0);
+      const indexB = Math.max(Number(b.q?.index) || 0, Number(b.d?.index) || 0);
+      return indexB - indexA || String(a.q?.keyword || a.d?.keyword || '').localeCompare(String(b.q?.keyword || b.d?.keyword || ''));
+    });
+    crossCurrentRows = rows;
+
+    document.getElementById('crossTableBody').innerHTML = rows.slice(0,1500).map(item => {
+      const conclusion = getCrossConclusion(item);
+      const keyword = item.q?.keyword || item.d?.keyword || '—';
+      return `<tr><td class="ios-keyword-main"><button type="button" class="cross-keyword-btn" data-cross-key="${encode(item.key)}" title="点击查看排名曲线">${escapeHtml(keyword)}</button></td><td>${item.q?'已发现':'—'}</td><td>${item.d?'已发现':'—'}</td><td>${item.q?`${displayNumber(item.q.rank)} / ${escapeHtml(item.q.rankChangeText||'—')}`:'—'}</td><td>${item.d?`${displayNumber(item.d.rank)} / ${escapeHtml(item.d.rankChangeText||'—')}`:'—'}</td><td>${displayNumber(item.q?.index)}</td><td>${displayNumber(item.d?.index)}</td><td>${escapeHtml(conclusion)}</td></tr>`;
+    }).join('');
+    renderCrossTrend(qAllRows, dAllRows, rows);
+  }
+
+  function initDiandianEvents() {
+    document.querySelectorAll('[data-dd-category]').forEach(button => button.addEventListener('click', () => { ddCategory=button.dataset.ddCategory; localStorage.setItem('aso_dd_category_v220',ddCategory); renderDiandianDashboard(); }));
+    [['ddAppSelect','app'],['ddBatchSelect','batch'],['ddCountrySelect','country'],['ddDateSelect','date']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { ddFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){ddFilters.batch='';ddFilters.country='';ddFilters.date='';} if(key==='batch'){ddFilters.country='';ddFilters.date='';} if(key==='country')ddFilters.date=''; renderDiandianDashboard(); }));
+    document.getElementById('ddSourceInput')?.addEventListener('input', event => { ddFilters.source=event.target.value; renderDiandianDashboard(); });
+    document.getElementById('ddKeywordInput')?.addEventListener('input', event => { ddFilters.keyword=event.target.value; renderDiandianDashboard(); });
+    document.getElementById('ddDeleteTaskBtn')?.addEventListener('click', deleteCurrentDiandianTask);
+    [['crossAppSelect','app'],['crossBatchSelect','batch'],['crossCountrySelect','country']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { crossFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){crossFilters.batch='';crossFilters.country='';} if(key==='batch')crossFilters.country=''; renderCrossValidation(); }));
+    document.getElementById('crossKeywordInput')?.addEventListener('input', event => { crossFilters.keyword=event.target.value; renderCrossValidation(); });
+    document.getElementById('crossTableBody')?.addEventListener('click', event => {
+      const button = event.target.closest('[data-cross-key]');
+      if (!button) return;
+      const key = decode(button.dataset.crossKey || '');
+      const willSelect = crossSelectedKey !== key;
+      crossSelectedKey = willSelect ? key : '';
+      renderCrossValidation();
+      if (willSelect) document.getElementById('crossTrendPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+    document.getElementById('crossTrendCloseBtn')?.addEventListener('click', () => { crossSelectedKey=''; renderCrossValidation(); });
+    document.getElementById('exportCrossBothBtn')?.addEventListener('click', () => exportCrossValidationExcel(true));
+    document.getElementById('exportCrossAllBtn')?.addEventListener('click', () => exportCrossValidationExcel(false));
+    document.getElementById('clearDiandianBtn')?.addEventListener('click', () => { if(!confirm('确定清空全部 iOS 点点快照吗？ST 和七麦数据不会受影响。'))return; localStorage.removeItem(DIANDIAN_KEY); renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); });
+  }
+
+  function initDataCenterEvents() {
+    document.querySelectorAll('.nav-btn').forEach(button => button.addEventListener('click', () => showPage(button.dataset.page)));
+    document.getElementById('overviewPlatformSelect')?.addEventListener('change', event => {
+      overviewFilters.platform = event.target.value || 'all'; overviewFilters.app=''; overviewFilters.batch=''; overviewFilters.country=''; overviewFilters.date=''; renderOverview();
+    });
+    [['overviewAppSelect','app'],['overviewBatchSelect','batch'],['overviewCountrySelect','country'],['overviewDateSelect','date']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => {
+      overviewFilters[key] = event.target.value ? decode(event.target.value) : '';
+      if (key==='app') { overviewFilters.batch=''; overviewFilters.country=''; overviewFilters.date=''; }
+      if (key==='batch') { overviewFilters.country=''; overviewFilters.date=''; }
+      if (key==='country') overviewFilters.date='';
+      renderOverview();
+    }));
+    document.querySelectorAll('[data-ios-category]').forEach(button => button.addEventListener('click', () => {
+      iosCategory = button.dataset.iosCategory; localStorage.setItem('aso_ios_category_v200', iosCategory); renderIosDashboard();
+    }));
+    [['iosAppSelect','app'],['iosBatchSelect','batch'],['iosCountrySelect','country'],['iosDateSelect','date']].forEach(([id,key]) => {
+      document.getElementById(id).addEventListener('change', event => { iosFilters[key] = event.target.value ? decode(event.target.value) : ''; if (key==='app'){iosFilters.batch='';iosFilters.country='';iosFilters.date='';} if(key==='batch'){iosFilters.country='';iosFilters.date='';} if(key==='country'){iosFilters.date='';} renderIosDashboard(); });
+    });
+    document.getElementById('iosSourceInput').addEventListener('input', event => { iosFilters.source = event.target.value; renderIosDashboard(); });
+    document.getElementById('iosKeywordInput').addEventListener('input', event => { iosFilters.keyword = event.target.value; renderIosDashboard(); });
+    document.getElementById('iosClearSelectionBtn').addEventListener('click', () => { selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); });
+    document.getElementById('iosClearCurrentBtn').addEventListener('click', clearCurrentIosView);
+    document.getElementById('iosDeleteTaskBtn')?.addEventListener('click', deleteCurrentQimaiTask);
+    document.getElementById('drawerCloseBtn').addEventListener('click', closeKeywordDrawer);
+    document.getElementById('keywordDrawerMask').addEventListener('click', event => { if (event.target.id === 'keywordDrawerMask') closeKeywordDrawer(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeKeywordDrawer(); });
+    document.getElementById('exportUnifiedBtn').addEventListener('click', exportUnifiedData);
+    document.getElementById('exportIosExcelBtn').addEventListener('click', exportIosExcel);
+    document.getElementById('importUnifiedBtn').addEventListener('click', () => document.getElementById('importUnifiedFile').click());
+    document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
+    document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
+    document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
+    document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
+    document.getElementById('clearSyncLogsBtn').addEventListener('click', () => { if(!confirm('确定清空同步日志吗？关键词数据不会删除。'))return; localStorage.removeItem(SYNC_LOG_KEY); renderOverview(); renderStorageSummary(); });
+  }
+
+
+  // 供 Chrome 扩展在看板加载完成后直接调用。返回确认结果，插件据此标记“已同步”。
+  window.ASO_DASHBOARD_RECEIVE = async function(payload = {}) {
+    const source = String(payload.source || '').toLowerCase();
+    try {
+      const isSt = source === 'sensortower' || source === 'st' || source === 'sensortower_status' || Boolean(payload.stStatus || payload.statusRecord || payload.statusRecords || payload.data);
+      if (isSt && !['qimai_ios','qimai','diandian_ios','diandian'].includes(source)) {
+        const incomingData = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.records) ? payload.records : []);
+        const inferredStatusCount = incomingData.length ? mergeIncomingData(incomingData) : 0;
+        const statusCount = mergeStStatusPayload(payload) + inferredStatusCount;
+        if (!incomingData.length && !statusCount) return { ok:false, code:'invalid_st_payload', message:'ST 同步数据为空。', dashboardVersion:DASHBOARD_VERSION };
+        addSyncLog({ source:'sensortower', status:'success', message:`插件自动同步 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。` });
+        renderDashboard(); renderOverview(); renderStorageSummary();
+        return { ok:true, code:'saved', message:`已保存 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。`, count:incomingData.length, statusCount, dashboardVersion:DASHBOARD_VERSION, receivedAt:new Date().toISOString() };
+      }
+      const isDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload.diandianState);
+      if (payload.verifySnapshot) {
+        if (isDiandian) {
+          const normalized = normalizeDiandianSnapshot(payload.verifySnapshot);
+          if (!normalized) return { ok:false, code:'invalid_snapshot', message:'点点快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
+          const exists = getDiandianSnapshots().some(item => diandianSnapshotKey(item) === diandianSnapshotKey(normalized));
+          return { ok:exists, code:exists?'verified':'not_found', message:exists?'看板已保存该点点快照。':'看板中尚未找到该点点快照。', dashboardVersion:DASHBOARD_VERSION, snapshotKey:diandianSnapshotKey(normalized) };
+        }
+        const normalized = normalizeQimaiSnapshot(payload.verifySnapshot);
+        if (!normalized) return { ok:false, code:'invalid_snapshot', message:'七麦快照格式无效。', dashboardVersion:DASHBOARD_VERSION };
+        const exists = getQimaiSnapshots().some(item => qimaiSnapshotKey(item) === qimaiSnapshotKey(normalized));
+        return { ok:exists, code:exists?'verified':'not_found', message:exists?'看板已保存该七麦快照。':'看板中尚未找到该七麦快照。', dashboardVersion:DASHBOARD_VERSION, snapshotKey:qimaiSnapshotKey(normalized) };
+      }
+
+      if (isDiandian) {
+        const count = mergeDiandianPayload(payload, 'plugin_direct');
+        renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); renderOverview();
+        const snapshots = extractDiandianSnapshots(payload).map(normalizeDiandianSnapshot).filter(Boolean);
+        return { ok:true, code:'saved', message:`已保存 ${count} 个点点快照。`, count, dashboardVersion:DASHBOARD_VERSION, snapshotKeys:snapshots.map(diandianSnapshotKey), receivedAt:new Date().toISOString() };
+      }
+
+      const looksLikeQimai = source === 'qimai_ios' || source === 'qimai' || Boolean(payload.qimaiState || payload.snapshot || payload.snapshots || payload.changedResults || payload.newEntryResults);
+      if (!looksLikeQimai) return { ok:false, code:'unsupported_source', message:'当前接收器仅处理七麦或点点 iOS 快照。', dashboardVersion:DASHBOARD_VERSION };
+      const count = mergeQimaiPayload(payload, 'plugin_direct');
+      renderIosDashboard(); renderCrossValidation(); renderStorageSummary(); renderOverview();
+      const snapshots = extractQimaiSnapshots(payload).map(normalizeQimaiSnapshot).filter(Boolean);
+      return { ok:true, code:'saved', message:`已保存 ${count} 个七麦快照。`, count, dashboardVersion:DASHBOARD_VERSION, snapshotKeys:snapshots.map(qimaiSnapshotKey), receivedAt:new Date().toISOString() };
+    } catch (error) {
+      console.error('插件自动同步处理失败：', error);
+      addSyncLog({ source:source || 'unknown', status:'failed', message:error.message || String(error) });
+      renderStorageSummary(); renderOverview();
+      return { ok:false, code:'save_failed', message:error.message || String(error), dashboardVersion:DASHBOARD_VERSION };
+    }
+  };
+
+
+  // 持久化桥接：扩展内容脚本通过 window.postMessage 与页面主世界通信。
+  // 相比每次临时注入函数，该通道在看板加载完成后持续存在，并返回明确保存确认。
+  (() => {
+    const CHANNEL = 'aso-dashboard-extension-bridge-v1';
+    if (window.__ASO_DASHBOARD_PAGE_BRIDGE__) return;
+    window.__ASO_DASHBOARD_PAGE_BRIDGE__ = true;
+    window.addEventListener('message', async event => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = event.data;
+      if (!message || message.channel !== CHANNEL || message.type !== 'request') return;
+      let ack;
+      try {
+        if (typeof window.ASO_DASHBOARD_RECEIVE !== 'function') {
+          ack = { ok:false, code:'receiver_not_ready', message:'看板接收器尚未完成初始化。', dashboardVersion:DASHBOARD_VERSION };
+        } else {
+          ack = await window.ASO_DASHBOARD_RECEIVE(message.payload || {});
+        }
+      } catch (error) {
+        ack = { ok:false, code:'bridge_save_failed', message:error?.message || String(error), dashboardVersion:DASHBOARD_VERSION };
+      }
+      window.postMessage({ channel:CHANNEL, type:'response', requestId:message.requestId, ack }, location.origin);
+    });
+  })();
+
+  window.ASO_DASHBOARD_STATUS = function() {
+    return {
+      ok:true,
+      dashboardVersion:DASHBOARD_VERSION,
+      stProcessingStatuses:getStProcessingStatuses().length,
+      qimaiSnapshots:getQimaiSnapshots().length,
+      diandianSnapshots:getDiandianSnapshots().length,
+      iosMinIndex:IOS_MIN_INDEX,
+      lastSync:getSyncLogs()[0]?.at || ''
+    };
+  };
+
+  function initStFilterEvents() {
+    const groupSelect = document.getElementById('appGroupSelect');
+    const appSelect = document.getElementById('appSelect');
+
+    groupSelect?.addEventListener('change', event => {
+      selectedAppGroup = event.target.value ? decode(event.target.value) : '';
+      selectedApps = [];
+      selectedBatches = [];
+      selectedItems = [];
+      persistStFilterState();
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+      renderDashboard();
+    });
+
+    appSelect?.addEventListener('change', event => {
+      const app = event.target.value ? decode(event.target.value) : '';
+      selectedApps = app ? [app] : [];
+      if (app) selectedAppGroup = getAppGroup(app);
+      selectedBatches = [];
+      selectedItems = [];
+      persistStFilterState();
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+      renderDashboard();
+    });
+  }
+
+  function safeInitialRender(label, callback) {
+    try { callback(); }
+    catch (error) { console.error(`[${label}] 初始化失败：`, error); }
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    // 先绑定筛选事件，再执行各模块渲染。某个模块即使报错，也不会导致 ST 下拉框失效。
+    initStFilterEvents();
+    initDataCenterEvents();
+    initDiandianEvents();
+    safeInitialRender('数据迁移', migrateExistingData);
+    safeInitialRender('ST 无排名修复', repairLegacyZeroRankRecords);
+    safeInitialRender('iOS 快照键迁移', () => {
+      saveQimaiSnapshots(getQimaiSnapshots());
+      saveDiandianSnapshots(getDiandianSnapshots());
+    });
+    safeInitialRender('URL 数据接收', receiveUrlData);
+    safeInitialRender('Sensor Tower', renderDashboard);
+    safeInitialRender('七麦', renderIosDashboard);
+    safeInitialRender('点点', renderDiandianDashboard);
+    safeInitialRender('交叉验证', renderCrossValidation);
+    safeInitialRender('总览', renderOverview);
+    safeInitialRender('数据管理', renderStorageSummary);
+    safeInitialRender('页面切换', () => showPage(activePage));
+
+    document.getElementById('ddTrendClearBtn')?.addEventListener('click', () => {
+      ddSelectedTrendKey = '';
+      renderDiandianTrend(ddCurrentRows);
+    });
+    const backToTopBtn = document.getElementById('backToTopBtn');
+    const updateBackToTop = () => backToTopBtn?.classList.toggle('show', window.scrollY > 520);
+    window.addEventListener('scroll', updateBackToTop, { passive:true });
+    backToTopBtn?.addEventListener('click', () => window.scrollTo({ top:0, behavior:'smooth' }));
+    updateBackToTop();
+
+    document.getElementById('excelCurrentBtn').addEventListener('click', () => {
+      const records = getCurrentFilteredRecords();
+      const label = buildCurrentScopeLabel(records);
+      exportExcelReport(records, label, document.getElementById('excelCurrentBtn'));
+    });
+    document.getElementById('excelAllBtn').addEventListener('click', () => {
+      exportExcelReport(getAllRecords(), '全部数据', document.getElementById('excelAllBtn'));
+    });
+    const stNodeIntervalSelect = document.getElementById('stNodeIntervalSelect');
+    if (stNodeIntervalSelect) {
+      stNodeIntervalSelect.value = String(stNodeIntervalDays);
+      stNodeIntervalSelect.addEventListener('change', () => {
+        stNodeIntervalDays = Number(stNodeIntervalSelect.value);
+        localStorage.setItem('st_node_interval_days', String(stNodeIntervalDays));
+        renderDashboard();
+      });
+    }
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      if (!confirm('确定清空全部 ST 看板数据吗？此操作不可撤销。')) return;
+      localStorage.removeItem(MASTER_KEY);
+      localStorage.removeItem('selected_app_group');
+      localStorage.removeItem('selected_apps');
+      localStorage.removeItem('selected_batches');
+      localStorage.removeItem('selected_items_v16');
+      localStorage.removeItem(NOTES_KEY);
+      selectedApps = [];
+      selectedBatches = [];
+      selectedItems = [];
+      renderDashboard();
+      renderOverview();
+      renderStorageSummary();
+    });
+  });
+
+  window.addEventListener('resize', () => {
+    if (chart) {
+      chart.resize();
+      clearTimeout(stChartResizeTimer);
+      stChartResizeTimer = setTimeout(() => updateChart(lastStChartData), 120);
+    }
+    if (iosTrendChart) iosTrendChart.resize();
+    if (iosOverviewTrendChart) iosOverviewTrendChart.resize();
+    if (ddTrendChart) ddTrendChart.resize();
+    if (crossTrendChart) crossTrendChart.resize();
+  });
