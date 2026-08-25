@@ -1144,22 +1144,29 @@
       return index % step === 0;
     };
 
+    // 强制生成展示刻度，避免 ECharts 对 category 轴自动恢复全部日期标签
+    const displayIndexes = values.map((value, index) => shouldShow(index, value) ? index : null)
+      .filter(index => index !== null);
+
     return {
       type: 'category',
       boundaryGap: options.boundaryGap === undefined ? false : Boolean(options.boundaryGap),
       data: values,
       axisLabel: {
-        // ECharts 5 在部分场景下对 interval 函数优化后仍可能显示全部标签，
-        // 这里改为 formatter 主动控制显示，确保按日期跨度稀疏。
-        interval: (index, value) => shouldShow(index, value),
-        formatter: (value, index) => shouldShow(index, value) ? formatAdaptiveDateLabel(value, index, values) : '',
-        hideOverlap: false,
+        interval: 0,
+        formatter: (value, index) => displayIndexes.includes(index)
+          ? formatAdaptiveDateLabel(value, index, values)
+          : '',
+        hideOverlap: true,
         showMinLabel: true,
         showMaxLabel: true,
         rotate: 0,
         margin: 12
       },
-      axisTick: { alignWithLabel: true, interval: (index, value) => shouldShow(index, value) },
+      axisTick: {
+        alignWithLabel: true,
+        interval: 0
+      },
       axisPointer: {
         label: { formatter: params => toDateKey(params.value) || String(params.value || '') }
       }
