@@ -1148,15 +1148,21 @@
     const displayIndexes = values.map((value, index) => shouldShow(index, value) ? index : null)
       .filter(index => index !== null);
 
+    // 使用强制展示刻度：ECharts category 轴仍保留全部 data，
+    // 但通过 interval 控制显示。这里兼容 ECharts 5 的 category 渲染。
     return {
       type: 'category',
       boundaryGap: options.boundaryGap === undefined ? false : Boolean(options.boundaryGap),
       data: values,
       axisLabel: {
-        interval: 0,
-        formatter: (value, index) => displayIndexes.includes(index)
-          ? formatAdaptiveDateLabel(value, index, values)
-          : '',
+        interval: function(index) {
+          return displayIndexes.includes(index);
+        },
+        formatter: function(value, index) {
+          return displayIndexes.includes(index)
+            ? formatAdaptiveDateLabel(value, index, values)
+            : '';
+        },
         hideOverlap: true,
         showMinLabel: true,
         showMaxLabel: true,
@@ -1165,7 +1171,9 @@
       },
       axisTick: {
         alignWithLabel: true,
-        interval: 0
+        interval: function(index) {
+          return displayIndexes.includes(index);
+        }
       },
       axisPointer: {
         label: { formatter: params => toDateKey(params.value) || String(params.value || '') }
