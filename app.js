@@ -56,6 +56,7 @@
   if (![0, 7, 14].includes(stNodeIntervalDays)) stNodeIntervalDays = 7;
   let selectedIosKeywords = new Set(safeJsonParse(localStorage.getItem(IOS_SELECTION_KEY) || '[]', []));
   let lastStChartData = [];
+  let lastStChartScopeData = [];
   let stChartResizeTimer = null;
 
   function parseDate(value) {
@@ -336,8 +337,12 @@
       .replace(/'/g, '&#039;');
   }
 
-  function noteKey(app, batch, date) {
+  function legacyNoteKey(app, batch, date) {
     return `${String(app || '').trim()}__${String(batch || '').trim()}__${toDateKey(date)}`;
+  }
+
+  function noteKey(app, batch, keyword, date) {
+    return `${String(app || '').trim()}__${String(batch || '').trim()}__${String(keyword || '').trim()}__${toDateKey(date)}`;
   }
 
   function getNotesMap() {
@@ -354,8 +359,15 @@
     localStorage.setItem(NOTES_KEY, JSON.stringify(notes || {}));
   }
 
-  function getNote(app, batch, date) {
-    return getNotesMap()[noteKey(app, batch, date)] || null;
+  function getNote(app, batch, keyword, date) {
+    return getNotesMap()[noteKey(app, batch, keyword, date)] || null;
+  }
+
+  function getNotesForKeyword(app, batch, keyword, allowedDates = null) {
+    const dateSet = allowedDates ? new Set(allowedDates.map(toDateKey)) : null;
+    return Object.values(getNotesMap())
+      .filter(note => note.App === app && note.Batch === batch && String(note.Keyword || '') === String(keyword || '') && (!dateSet || dateSet.has(toDateKey(note.Date))))
+      .sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
   }
 
   function getNotesForBatch(app, batch, allowedDates = null) {
@@ -365,11 +377,11 @@
       .sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
   }
 
-  function editNote(app, batch, date) {
+  function editNote(app, batch, keyword, date) {
     const notes = getNotesMap();
-    const key = noteKey(app, batch, date);
+    const key = noteKey(app, batch, keyword, date);
     const current = notes[key]?.Text || '';
-    const input = prompt(`为【${app}｜${batch}】在 ${toDateKey(date)} 添加备注：`, current);
+    const input = prompt(`为【${app}｜${displayBatch(batch)}｜${keyword}】在 ${toDateKey(date)} 添加备注：`, current);
     if (input === null) return;
 
     const text = input.trim();
@@ -385,6 +397,7 @@
     notes[key] = {
       App: app,
       Batch: batch,
+      Keyword: keyword,
       Date: toDateKey(date),
       Text: text,
       UpdatedAt: new Date().toISOString()
@@ -393,22 +406,22 @@
     renderDashboard();
   }
 
-  function chooseNoteDate(app, batch, defaultDate) {
+  function chooseNoteDate(app, batch, keyword, defaultDate) {
     const suggested = toDateKey(defaultDate || new Date());
-    const selected = prompt(`请输入备注日期（YYYY-MM-DD）：`, suggested);
+    const selected = prompt(`请输入【${keyword}】的备注日期（YYYY-MM-DD）：`, suggested);
     if (selected === null) return;
     const date = toDateKey(String(selected).trim());
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseDate(date)) {
       alert('日期格式不正确，请输入 YYYY-MM-DD，例如 2026-07-29。');
       return;
     }
-    editNote(app, batch, date);
+    editNote(app, batch, keyword, date);
   }
 
-  function deleteNote(app, batch, date) {
-    if (!confirm(`确定删除【${app}｜${batch}】在 ${toDateKey(date)} 的备注吗？`)) return;
+  function deleteNote(app, batch, keyword, date) {
+    if (!confirm(`确定删除【${app}｜${displayBatch(batch)}｜${keyword}】在 ${toDateKey(date)} 的备注吗？`)) return;
     const notes = getNotesMap();
-    delete notes[noteKey(app, batch, date)];
+    delete notes[noteKey(app, batch, keyword, date)];
     saveNotesMap(notes);
     renderDashboard();
   }
@@ -418,9 +431,12 @@
     const notes = getNotesMap();
     incomingNotes.forEach(note => {
       if (!note || !note.App || !note.Batch || !note.Date || !String(note.Text || '').trim()) return;
-      notes[noteKey(note.App, note.Batch, note.Date)] = {
+      const keyword = String(note.Keyword || note.keyword || '').trim();
+      const key = keyword ? noteKey(note.App, note.Batch, keyword, note.Date) : legacyNoteKey(note.App, note.Batch, note.Date);
+      notes[key] = {
         App: String(note.App).trim(),
         Batch: String(note.Batch).trim(),
+        Keyword: keyword,
         Date: toDateKey(note.Date),
         Text: String(note.Text).trim(),
         UpdatedAt: note.UpdatedAt || new Date().toISOString()
@@ -794,7 +810,7 @@
   function renderStHistoryManager(records) {
     const sorted = [...records].sort((a, b) => parseDate(b.Date) - parseDate(a.Date) || String(b.CapturedAt || '').localeCompare(String(a.CapturedAt || '')));
     const rows = sorted.map(record => {
-      const note = getNote(record.App, record.Batch, record.Date);
+      const note = getNote(record.App, record.Batch, record.Keyword, record.Date);
       return `
         <div class="history-record">
           <span class="history-date">${escapeHtml(displayDate(record.Date))}</span>
@@ -802,7 +818,7 @@
           ${stCheckpointBadge(record)}
           ${stCaptureMeta(record)}
           <span class="history-actions">
-            <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-date="${encode(record.Date)}" title="${note ? '编辑该日备注' : '添加该日备注'}">📝</button>
+            <button class="note-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="${note ? '编辑该日备注' : '添加该日备注'}">📝</button>
             <span class="del-day-btn" data-app="${encode(record.App)}" data-batch="${encode(record.Batch)}" data-keyword="${encode(record.Keyword)}" data-date="${encode(record.Date)}" title="删除该日记录">✕</span>
           </span>
         </div>`;
@@ -899,17 +915,17 @@
       const key = itemKey(row);
       const historyManager = renderStHistoryManager(row.records);
 
-      const rowNotes = getNotesForBatch(row.App, row.Batch);
+      const rowNotes = getNotesForKeyword(row.App, row.Batch, row.Keyword);
       const notesListHtml = rowNotes.length
         ? rowNotes.map(note => `
           <div class="note-card">
             <span class="note-date">${escapeHtml(displayDate(note.Date))}</span>
             <span class="note-text">${escapeHtml(note.Text)}</span>
-            <button class="note-edit-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">编辑</button>
-            <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-date="${encode(note.Date)}">删除</button>
+            <button class="note-edit-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-keyword="${encode(note.Keyword)}" data-date="${encode(note.Date)}">编辑</button>
+            <button class="note-delete-btn" data-app="${encode(note.App)}" data-batch="${encode(note.Batch)}" data-keyword="${encode(note.Keyword)}" data-date="${encode(note.Date)}">删除</button>
           </div>`).join('')
         : `<span class="note-empty">暂无备注</span>`;
-      const noteDateAction = `<div class="note-date-action"><button class="note-date-pick-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-date="${encode(row.latestProcessedDate || row.last.Date)}">＋ 选择日期添加备注</button></div>`;
+      const noteDateAction = `<div class="note-date-action"><button class="note-date-pick-btn" data-app="${encode(row.App)}" data-batch="${encode(row.Batch)}" data-keyword="${encode(row.Keyword)}" data-date="${encode(row.latestProcessedDate || row.last.Date)}">＋ 选择日期添加备注</button></div>`;
       const noteAndHistoryHtml = `${notesListHtml}${noteDateAction}${historyManager}`;
       const latestRankHtml = row.latestRecord
         ? `#${escapeHtml(row.latestRecord.Rank)}`
@@ -949,6 +965,7 @@
       button.addEventListener('click', () => editNote(
         decode(button.dataset.app),
         decode(button.dataset.batch),
+        decode(button.dataset.keyword),
         decode(button.dataset.date)
       ));
     });
@@ -957,6 +974,7 @@
       button.addEventListener('click', () => chooseNoteDate(
         decode(button.dataset.app),
         decode(button.dataset.batch),
+        decode(button.dataset.keyword),
         decode(button.dataset.date)
       ));
     });
@@ -965,6 +983,7 @@
       button.addEventListener('click', () => deleteNote(
         decode(button.dataset.app),
         decode(button.dataset.batch),
+        decode(button.dataset.keyword),
         decode(button.dataset.date)
       ));
     });
@@ -977,7 +996,7 @@
       ));
     });
 
-    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))));
+    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))), filteredData);
   }
 
   function deleteSingleDate(app, batch, keyword, date) {
@@ -1014,11 +1033,14 @@
     renderDashboard();
   }
 
-  function updateChart(data) {
+  function updateChart(data, scopeData = data) {
     lastStChartData = Array.isArray(data) ? data.slice() : [];
-    const sortedDates = getStProcessedDatesForRecords(lastStChartData);
+    lastStChartScopeData = Array.isArray(scopeData) ? scopeData.slice() : lastStChartData.slice();
+    const axisRecords = lastStChartScopeData.length ? lastStChartScopeData : lastStChartData;
+    const sortedDates = getStProcessedDatesForRecords(axisRecords);
     const dates = sortedDates.length ? enumerateDateKeys(sortedDates[0], sortedDates[sortedDates.length - 1]) : [];
-    const validRanks = data
+    const rankSource = data.length ? data : axisRecords;
+    const validRanks = rankSource
       .map(item => Number(item.Rank))
       .filter(rank => Number.isFinite(rank) && rank > 0);
     const maxRank = validRanks.length ? Math.max(...validRanks) : 1;
@@ -1045,16 +1067,17 @@
     const notes = [];
     const seenNotes = new Set();
     const noteScopes = new Map();
-    data.forEach(item => noteScopes.set(`${item.App}__${item.Batch}`, { App:item.App, Batch:item.Batch }));
+    axisRecords.forEach(item => noteScopes.set(`${item.App}__${item.Batch}__${item.Keyword}`, { App:item.App, Batch:item.Batch, Keyword:item.Keyword }));
     noteScopes.forEach(scope => {
-      getNotesForBatch(scope.App, scope.Batch, dates).forEach(note => {
-        const key = noteKey(note.App, note.Batch, note.Date);
+      getNotesForKeyword(scope.App, scope.Batch, scope.Keyword, dates).forEach(note => {
+        const key = noteKey(note.App, note.Batch, note.Keyword, note.Date);
         if (seenNotes.has(key)) return;
         seenNotes.add(key);
         notes.push({
           value: [note.Date, noteY],
           App: note.App,
           Batch: note.Batch,
+          Keyword: note.Keyword,
           Date: note.Date,
           Text: note.Text
         });
@@ -1080,7 +1103,7 @@
             const top = Math.max(8, point[1] - size.contentSize[1] - 18);
             return [Math.max(8, left), top];
           },
-          formatter: params => `<b>${escapeHtml(params.data.Date)}</b><br>${escapeHtml(params.data.App)}｜${escapeHtml(params.data.Batch)}<br>${escapeHtml(params.data.Text)}`
+          formatter: params => `<b>${escapeHtml(params.data.Date)}</b><br>${escapeHtml(params.data.App)}｜${escapeHtml(displayBatch(params.data.Batch))}｜${escapeHtml(params.data.Keyword || '')}<br>${escapeHtml(params.data.Text)}`
         },
         data: notes
       });
@@ -1385,7 +1408,7 @@
           formatRankPoint(first),
           formatRankPoint(latest, latestProcessedDate),
           rankChange,
-          getNotesForBatch(first.App, first.Batch, group.map(item => item.Date))
+          getNotesForKeyword(first.App, first.Batch, first.Keyword, group.map(item => item.Date))
             .map(note => `${note.Date}：${note.Text}`)
             .join('\n')
         ]);
@@ -2565,7 +2588,7 @@
     document.querySelectorAll('.nav-btn').forEach(button => button.classList.toggle('active', button.dataset.page === activePage));
     if (activePage === 'stSection' && chart) setTimeout(() => {
       chart.resize();
-      updateChart(lastStChartData);
+      updateChart(lastStChartData, lastStChartScopeData);
     }, 30);
     if (activePage === 'iosSection') renderIosDashboard();
     if (activePage === 'diandianSection') renderDiandianDashboard();
@@ -3385,7 +3408,7 @@
     if (chart) {
       chart.resize();
       clearTimeout(stChartResizeTimer);
-      stChartResizeTimer = setTimeout(() => updateChart(lastStChartData), 120);
+      stChartResizeTimer = setTimeout(() => updateChart(lastStChartData, lastStChartScopeData), 120);
     }
     if (iosTrendChart) iosTrendChart.resize();
     if (iosOverviewTrendChart) iosOverviewTrendChart.resize();
