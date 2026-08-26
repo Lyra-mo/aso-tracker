@@ -876,7 +876,7 @@
 
       return {
         App: first.App,
-        Batch: displayBatch(first.Batch),
+        Batch: first.Batch,
         RawBatch: first.Batch,
         Keyword: first.Keyword,
         first,
