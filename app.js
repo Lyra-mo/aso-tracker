@@ -3437,34 +3437,24 @@
       });
     }
 
-    document.getElementById('deleteAppBtn').addEventListener('click', () => {
-      const selected = getSelectedRows ? getSelectedRows() : [];
-      const currentApp = document.getElementById('appSelect')?.value || selectedApps?.[0] || '';
-      const appName = currentApp || (selected[0] && selected[0].App) || '';
-      if (!appName) {
-        alert('请先选择一个 App');
+    document.getElementById('deleteAppBtn')?.addEventListener('click', () => {
+      const currentApp = document.getElementById('appSelect')?.value;
+      if (!currentApp || currentApp === 'all') {
+        alert('请先选择具体 App。');
         return;
       }
-      const rows = (JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
-        .filter(item => item.App === appName);
-      if (!rows.length) {
-        alert('未找到该 App 数据');
+      const allData = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
+      const removed = allData.filter(item => item.App === currentApp || item.app === currentApp);
+      if (!removed.length) {
+        alert('未找到该 App 数据。');
         return;
       }
-      if (!confirm(`确认删除当前 App 数据？\n\n${appName}\n\n数据将进入临时回收区。`)) return;
-      const trash = JSON.parse(localStorage.getItem(TRASH_KEY) || '[]');
-      trash.push({
-        app: appName,
-        deletedAt: Date.now(),
-        data: rows
-      });
-      localStorage.setItem(TRASH_KEY, JSON.stringify(trash));
-      const remain = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')
-        .filter(item => item.App !== appName);
+      if (!confirm(`确定删除当前 App 数据？\n\nApp：${currentApp}\n数据量：${removed.length} 条\n\n将移动到临时回收区。`)) return;
+      const trash = JSON.parse(localStorage.getItem('aso_trash_data') || '[]');
+      trash.push({app: currentApp, deletedAt: new Date().toISOString(), data: removed});
+      localStorage.setItem('aso_trash_data', JSON.stringify(trash));
+      const remain = allData.filter(item => !(item.App === currentApp || item.app === currentApp));
       localStorage.setItem(MASTER_KEY, JSON.stringify(remain));
-      selectedApps = [];
-      selectedBatches = [];
-      selectedItems = [];
       renderDashboard();
       renderOverview();
       renderStorageSummary();
