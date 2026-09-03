@@ -3437,14 +3437,31 @@
       });
     }
 
-    document.getElementById('clearBtn').addEventListener('click', () => {
-      if (!confirm('确定清空全部 ST 看板数据吗？此操作不可撤销。')) return;
-      localStorage.removeItem(MASTER_KEY);
-      localStorage.removeItem('selected_app_group');
-      localStorage.removeItem('selected_apps');
-      localStorage.removeItem('selected_batches');
-      localStorage.removeItem('selected_items_v16');
-      localStorage.removeItem(NOTES_KEY);
+    document.getElementById('deleteAppBtn').addEventListener('click', () => {
+      const selected = getSelectedRows ? getSelectedRows() : [];
+      const currentApp = document.getElementById('appSelect')?.value || selectedApps?.[0] || '';
+      const appName = currentApp || (selected[0] && selected[0].App) || '';
+      if (!appName) {
+        alert('请先选择一个 App');
+        return;
+      }
+      const rows = (JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
+        .filter(item => item.App === appName);
+      if (!rows.length) {
+        alert('未找到该 App 数据');
+        return;
+      }
+      if (!confirm(`确认删除当前 App 数据？\n\n${appName}\n\n数据将进入临时回收区。`)) return;
+      const trash = JSON.parse(localStorage.getItem(TRASH_KEY) || '[]');
+      trash.push({
+        app: appName,
+        deletedAt: Date.now(),
+        data: rows
+      });
+      localStorage.setItem(TRASH_KEY, JSON.stringify(trash));
+      const remain = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]')
+        .filter(item => item.App !== appName);
+      localStorage.setItem(MASTER_KEY, JSON.stringify(remain));
       selectedApps = [];
       selectedBatches = [];
       selectedItems = [];
