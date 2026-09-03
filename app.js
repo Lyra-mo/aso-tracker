@@ -15,7 +15,8 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.15';
+  const DASHBOARD_VERSION = '2.2.20';
+  const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
 
   const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
@@ -225,6 +226,50 @@
 
   function itemKey(item) {
     return `${item.App}__${item.RawBatch || item.Batch}__${item.Keyword}`;
+  }
+
+
+  function getTrashRecords() {
+    return safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
+  }
+  function saveTrashRecords(list) {
+    localStorage.setItem(TRASH_KEY, JSON.stringify(list || []));
+  }
+  function cleanupTrash() {
+    const now = Date.now();
+    const kept = getTrashRecords().filter(item => now - Number(item.deletedAt || now) < 21*24*60*60*1000);
+    saveTrashRecords(kept);
+  }
+  function deleteAppTracking(app) {
+    if (!app) return;
+    const all = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
+    const removed = all.filter(r => r.App === app);
+    if (!removed.length) return alert('未找到该 App 数据');
+    if (!confirm(`确定移除 ${app} 的全部追踪数据？\n数据会进入回收站，21天后自动清理。`)) return;
+    const remain = all.filter(r => r.App !== app);
+    saveMasterData(remain);
+    const trash = getTrashRecords();
+    trash.push({type:'st_app', app, records:removed, deletedAt:Date.now()});
+    saveTrashRecords(trash);
+    renderDashboard(); renderOverview(); renderStorageSummary();
+    alert('已移入回收站');
+  }
+  function restoreTrash(index) {
+    const trash = getTrashRecords();
+    const item = trash[index];
+    if (!item) return;
+    const current = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
+    saveMasterData([...current, ...(item.records||[])]);
+    trash.splice(index,1);
+    saveTrashRecords(trash);
+    renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+  }
+  function renderTrashPanel() {
+    const box=document.getElementById('trashPanel');
+    if(!box) return;
+    const trash=getTrashRecords();
+    box.innerHTML = trash.length ? trash.map((x,i)=>`<div class="panel"><b>${escapeHtml(x.app||'')}</b> <span>删除于 ${new Date(x.deletedAt).toLocaleDateString()}</span> <button data-trash-index="${i}" class="action-btn">恢复</button></div>`).join('') : '<div class="hint">暂无回收站数据</div>';
+    box.querySelectorAll('[data-trash-index]').forEach(btn=>btn.onclick=()=>restoreTrash(Number(btn.dataset.trashIndex)));
   }
 
   function saveMasterData(records) {
@@ -3352,11 +3397,13 @@
     });
     safeInitialRender('URL 数据接收', receiveUrlData);
     safeInitialRender('Sensor Tower', renderDashboard);
+    cleanupTrash();
     safeInitialRender('七麦', renderIosDashboard);
     safeInitialRender('点点', renderDiandianDashboard);
     safeInitialRender('交叉验证', renderCrossValidation);
     safeInitialRender('总览', renderOverview);
     safeInitialRender('数据管理', renderStorageSummary);
+    renderTrashPanel();
     safeInitialRender('页面切换', () => showPage(activePage));
 
     document.getElementById('ddTrendClearBtn')?.addEventListener('click', () => {
@@ -3377,6 +3424,7 @@
     document.getElementById('excelAllBtn').addEventListener('click', () => {
       exportExcelReport(getAllRecords(), '全部数据', document.getElementById('excelAllBtn'));
     });
+    document.getElementById('deleteCurrentAppBtn')?.addEventListener('click',()=>{ if(selectedApps.length) deleteAppTracking(selectedApps[0]); else alert('请先选择 App'); });
     const stNodeIntervalSelect = document.getElementById('stNodeIntervalSelect');
     if (stNodeIntervalSelect) {
       stNodeIntervalSelect.value = String(stNodeIntervalDays);
