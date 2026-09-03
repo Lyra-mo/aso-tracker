@@ -72,7 +72,8 @@
           <div class="toolbar">
             <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
             <button id="excelAllBtn" class="excel-btn">导出全部 ST Excel</button>
-            <button id="deleteCurrentAppBtn" class="clear-btn">删除当前 App 数据</button>
+            <button id="deleteCurrentAppBtn" class="action-btn danger">删除当前 App 数据</button>
+              <button id="trashBtn" class="action-btn">回收站</button>
           </div>
           <div class="selector-title">App 筛选</div>
           <div class="filter-row">
@@ -223,8 +224,7 @@
             <button id="clearDiandianBtn" class="action-btn danger">清空 iOS 点点数据</button>
             <button id="clearSyncLogsBtn" class="action-btn danger">清空同步日志</button>
           </div>
-          <div class="hint">ST 数据请按 App 单独删除。删除后进入回收站，可在 21 天内恢复。</div>
-          <div class="panel-title" style="margin-top:16px"><h3>ST 回收站</h3></div><div id="stTrashList"></div>
+          <div class="hint">ST 数据请在 Sensor Tower 页面单独清理。清理前建议先导出全部 JSON。</div>
         </div>
       </section>
     </main>
