@@ -759,16 +759,8 @@
     };
 
     // 强制生成展示刻度，避免 ECharts 对 category 轴自动恢复全部日期标签
-    const step = Math.ceil(values.length / 8);
-
-const displayIndexes = values
-    .map((value, index) => {
-        if (index === 0 || index === values.length - 1 || index % step === 0) {
-            return index;
-        }
-        return null;
-    })
-    .filter(index => index !== null);
+    const displayIndexes = values.map((value, index) => shouldShow(index, value) ? index : null)
+      .filter(index => index !== null);
 
     // 使用强制展示刻度：ECharts category 轴仍保留全部 data，
     // 但通过 interval 控制显示。这里兼容 ECharts 5 的 category 渲染。
