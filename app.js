@@ -730,7 +730,16 @@
 
   function buildAdaptiveDateAxis(dates, options = {}) {
     const values = Array.isArray(dates) ? dates : [];
-    const forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
+    let forcedDates = new Set((options.forcedDates || []).map(toDateKey).filter(Boolean));
+    // 避免强制日期过多导致 X 轴标签拥挤：Sensor Tower 风格只保留少量关键节点
+    if (forcedDates.size > 8) {
+      const forcedList = [...forcedDates];
+      forcedDates = new Set([
+        forcedList[0],
+        ...forcedList.filter((_, index) => index > 0 && index < forcedList.length - 1 && index % Math.ceil(forcedList.length / 6) === 0),
+        forcedList[forcedList.length - 1]
+      ].filter(Boolean));
+    }
     // 使用真实日期跨度，而不是数据点数量判断展示密度
     const spanDays = values.length > 1 ? diffDays(values[values.length - 1], values[0]) + 1 : values.length;
     // 日期展示规则：
@@ -1041,11 +1050,7 @@
       ));
     });
 
-    const chartData = selectedItems.length
-  ? filteredData.filter(item => selectedItems.includes(itemKey(item)))
-  : filteredData;
-
-updateChart(chartData, filteredData);
+    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))), filteredData);
   }
 
   function deleteSingleDate(app, batch, keyword, date) {
