@@ -1041,7 +1041,11 @@
       ));
     });
 
-    updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))), filteredData);
+    const chartData = selectedItems.length
+  ? filteredData.filter(item => selectedItems.includes(itemKey(item)))
+  : filteredData;
+
+updateChart(chartData, filteredData);
   }
 
   function deleteSingleDate(app, batch, keyword, date) {
