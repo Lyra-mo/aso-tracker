@@ -513,9 +513,40 @@
   }
 
   function getStProcessingStatuses() {
-    const parsed = safeJsonParse(localStorage.getItem(ST_STATUS_KEY) || '[]', []);
-    return Array.isArray(parsed) ? parsed.map(normalizeStStatusRecord).filter(Boolean) : [];
+  const parsed = safeJsonParse(
+    localStorage.getItem(ST_STATUS_KEY) || '[]',
+    []
+  );
+
+  if (!Array.isArray(parsed)) return [];
+
+  const list = parsed
+    .map(normalizeStStatusRecord)
+    .filter(Boolean);
+
+  // 自动清理已经不存在于主数据中的 ST 状态
+  const master = safeJsonParse(
+    localStorage.getItem(MASTER_KEY) || '[]',
+    []
+  );
+
+  const activeApps = new Set(
+    master.map(item => item.App || item.app).filter(Boolean)
+  );
+
+  const cleaned = list.filter(
+    item => activeApps.has(item.App || item.app)
+  );
+
+  if (cleaned.length !== list.length) {
+    localStorage.setItem(
+      ST_STATUS_KEY,
+      JSON.stringify(cleaned)
+    );
   }
+
+  return cleaned;
+}
 
   function saveStProcessingStatuses(records) {
     const map = new Map();
