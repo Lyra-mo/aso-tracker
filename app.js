@@ -242,28 +242,90 @@
   }
   function deleteAppTracking(app) {
     if (!app) return;
+
     const all = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
-    const removed = all.filter(r => r.App === app);
+
+    const removed = all.filter(
+      r => r.App === app || r.app === app
+    );
+
     if (!removed.length) return alert('未找到该 App 数据');
+
     if (!confirm(`确定移除 ${app} 的全部追踪数据？\n数据会进入回收站，21天后自动清理。`)) return;
-    const remain = all.filter(r => r.App !== app);
+
+
+    // 保存 ST 状态到回收站
+    const stStatuses = getStProcessingStatuses();
+
+    const removedStatuses = stStatuses.filter(
+      item => item.App === app || item.app === app
+    );
+
+    const remainStatuses = stStatuses.filter(
+      item => item.App !== app && item.app !== app
+    );
+
+    saveStProcessingStatuses(remainStatuses);
+
+
+    // 删除主数据
+    const remain = all.filter(
+      r => r.App !== app && r.app !== app
+    );
+
     saveMasterData(remain);
+
+
+    // 保存完整回收站数据
     const trash = getTrashRecords();
-    trash.push({type:'st_app', app, records:removed, deletedAt:Date.now()});
+
+    trash.push({
+      type:'st_app',
+      app,
+      records: removed,
+      stStatuses: removedStatuses,
+      deletedAt: Date.now()
+    });
+
     saveTrashRecords(trash);
+
     renderDashboard();
-    cleanupOrphanStStatuses(); renderOverview(); renderStorageSummary();
+    cleanupOrphanStStatuses();
+    renderOverview();
+    renderStorageSummary();
     alert('已移入回收站');
   }
   function restoreTrash(index) {
     const trash = getTrashRecords();
     const item = trash[index];
     if (!item) return;
+
     const current = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
-    saveMasterData([...current, ...(item.records||[])]);
+
+    saveMasterData([
+      ...current,
+      ...(item.records || [])
+    ]);
+
+
+    // 恢复 ST 状态
+    if (Array.isArray(item.stStatuses) && item.stStatuses.length) {
+      const currentStatuses = getStProcessingStatuses();
+
+      saveStProcessingStatuses([
+        ...currentStatuses,
+        ...item.stStatuses
+      ]);
+    }
+
+
     trash.splice(index,1);
     saveTrashRecords(trash);
-    renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+
+    renderDashboard();
+    renderOverview();
+    renderStorageSummary();
+    renderTrashPanel();
   }
   function renderTrashPanel() {
     const box=document.getElementById('trashPanel');
