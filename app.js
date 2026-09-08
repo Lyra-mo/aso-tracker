@@ -251,7 +251,8 @@
     const trash = getTrashRecords();
     trash.push({type:'st_app', app, records:removed, deletedAt:Date.now()});
     saveTrashRecords(trash);
-    renderDashboard(); renderOverview(); renderStorageSummary();
+    renderDashboard();
+    cleanupOrphanStStatuses(); renderOverview(); renderStorageSummary();
     alert('已移入回收站');
   }
   function restoreTrash(index) {
@@ -3218,7 +3219,29 @@
     renderCrossTrend(qAllRows, dAllRows, rows);
   }
 
-  function initDiandianEvents() {
+  
+function cleanupOrphanStStatuses() {
+    try {
+        const statuses = getStProcessingStatuses();
+        const master = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
+
+        const activeApps = new Set(
+            master.map(item => item.App || item.app).filter(Boolean)
+        );
+
+        const cleaned = statuses.filter(item =>
+            activeApps.has(item.App || item.app)
+        );
+
+        if (cleaned.length !== statuses.length) {
+            saveStProcessingStatuses(cleaned);
+        }
+    } catch (e) {
+        console.warn('cleanupOrphanStStatuses failed:', e);
+    }
+}
+
+function initDiandianEvents() {
     document.querySelectorAll('[data-dd-category]').forEach(button => button.addEventListener('click', () => { ddCategory=button.dataset.ddCategory; localStorage.setItem('aso_dd_category_v220',ddCategory); renderDiandianDashboard(); }));
     [['ddAppSelect','app'],['ddBatchSelect','batch'],['ddCountrySelect','country'],['ddDateSelect','date']].forEach(([id,key]) => document.getElementById(id)?.addEventListener('change', event => { ddFilters[key]=event.target.value?decode(event.target.value):''; if(key==='app'){ddFilters.batch='';ddFilters.country='';ddFilters.date='';} if(key==='batch'){ddFilters.country='';ddFilters.date='';} if(key==='country')ddFilters.date=''; renderDiandianDashboard(); }));
     document.getElementById('ddSourceInput')?.addEventListener('input', event => { ddFilters.source=event.target.value; renderDiandianDashboard(); });
