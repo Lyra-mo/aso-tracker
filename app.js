@@ -559,15 +559,21 @@
     const date = toDateKey(record.date || record.dataDate || record.scheduledDate || record.Date || '');
     if (!app || !batch || !date) return null;
     return {
-      app,
-      batch,
-      country:String(record.country || record.Country || '').trim().toUpperCase(),
-      date,
-      status:String(record.status || record.captureStatus || 'completed').trim(),
-      capturedAt:record.capturedAt || record.CapturedAt || new Date().toISOString(),
-      reason:String(record.reason || record.message || record.lastError || '').trim(),
-      keywordCount:Number.isFinite(Number(record.keywordCount)) ? Number(record.keywordCount) : null
-    };
+  app,
+  batch,
+  country:String(record.country || record.Country || '').trim().toUpperCase(),
+  date,
+  status:String(record.status || record.captureStatus || 'completed').trim(),
+  capturedAt:record.capturedAt || record.CapturedAt || new Date().toISOString(),
+  reason:String(record.reason || record.message || record.lastError || '').trim(),
+  keywordCount:Number.isFinite(Number(record.keywordCount)) ? Number(record.keywordCount) : null,
+
+  // 新增：自动节点追踪
+  autoTrack: record.autoTrack === true,
+
+  // 新增：T+3/T+7/T+14/T+28节点
+  nodes:Array.isArray(record.nodes) ? record.nodes : []
+};
   }
 
   function stStatusKey(record) {
