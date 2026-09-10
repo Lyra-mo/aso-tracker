@@ -15,10 +15,27 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.2.20';
+  const DASHBOARD_VERSION = '2.3.21';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
+  // ST auto tracking compatibility (v2.3.21)
+  // Keeps old dashboards compatible with future plugin auto-tracking tasks.
+  const ST_TRACKING_TASKS_KEY = 'aso_st_tracking_tasks_v1';
 
-  const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
+  function ensureStTrackingCompatibility() {
+    try {
+      const existing = JSON.parse(localStorage.getItem(ST_TRACKING_TASKS_KEY) || '[]');
+      if (!Array.isArray(existing)) {
+        localStorage.setItem(ST_TRACKING_TASKS_KEY, '[]');
+      }
+    } catch (e) {
+      localStorage.setItem(ST_TRACKING_TASKS_KEY, '[]');
+    }
+  }
+
+
+    ensureStTrackingCompatibility();
+
+const chart = window.echarts ? echarts.init(document.getElementById('chartContainer')) : null;
   let iosTrendChart = null;
   let iosOverviewTrendChart = null;
   let ddTrendChart = null;
