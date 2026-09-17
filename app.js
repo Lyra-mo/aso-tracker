@@ -2100,22 +2100,39 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
 
 
-  // iOS任务批次兼容：batch 是抓取日期批次，页面筛选使用任务起始批次
+  // iOS任务批次兼容：
+  // batch 保存真实抓取批次；taskBatch 代表一次ASO测试周期的起始批次。
+  // 点点可能只有后续抓取批次，因此需要同时参考七麦/点点全部快照。
   function getIosTaskBatch(row, pool = []) {
     if (!row) return '';
-    if (row.taskBatch) return row.taskBatch;
+
     const app = row.app || '';
     const country = row.country || '';
-    const rows = (pool || []).filter(item =>
-      (item.app || '') === app && (item.country || '') === country
-    );
-    const batches = [...new Set(rows.map(item => item.batch).filter(Boolean))];
-    if (!batches.length) return row.batch || '';
+
+    const allRows = [
+      ...(Array.isArray(pool) ? pool : []),
+      ...safeJsonParse(localStorage.getItem(QIMAI_KEY) || '[]', []),
+      ...safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', [])
+    ];
+
+    const batches = [...new Set(
+      allRows
+        .filter(item =>
+          (item.app || '') === app &&
+          (item.country || '') === country &&
+          item.batch
+        )
+        .map(item => item.batch)
+    )];
+
+    if (!batches.length) return row.taskBatch || row.batch || '';
+
     const dated = batches.map(batch => {
       const m = String(batch).match(/T1-(\d{8})/);
-      return {batch, date:m ? m[1] : '99999999'};
-    }).sort((a,b)=>a.date.localeCompare(b.date));
-    return dated[0]?.batch || row.batch || '';
+      return { batch, date: m ? m[1] : '99999999' };
+    }).sort((a,b) => a.date.localeCompare(b.date));
+
+    return dated[0]?.batch || row.taskBatch || row.batch || '';
   }
 
   function decorateIosTaskBatch(rows) {
