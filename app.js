@@ -2986,7 +2986,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
 
   function renderDiandianSelectors() {
-    const snapshots = getDiandianSnapshots();
+    const snapshots = decorateIosTaskBatch(getDiandianSnapshots());
     const apps = [...new Set(snapshots.map(item => item.app))].sort();
     if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
     fillSelect('ddAppSelect', apps, ddFilters.app, '全部 App');
@@ -3158,7 +3158,8 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
 
 function getCrossSourceRows(snapshots) {
-    return [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
+    const sourceRows = [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')];
+    return decorateIosTaskBatch(sourceRows)
       .map(row => ({ ...row, keywordNormalized: normalizeCrossKeyword(row.keywordNormalized || row.keyword) }))
       .filter(row => row.keywordNormalized);
   }
@@ -3367,7 +3368,7 @@ function getCrossSourceRows(snapshots) {
     fillSelect('crossBatchSelect', tasks, crossFilters.batch, '全部测试任务');
 
     const batchScoped = crossFilters.batch ? appScoped.filter(item => {
-      const key = `${item.app || ''}|${item.batch || ''}|${item.country || ''}`;
+      const key = `${item.app || ''}|${item.taskBatch || item.batch || ''}|${item.country || ''}`;
       return key === crossFilters.batch;
     }) : appScoped;
     const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
