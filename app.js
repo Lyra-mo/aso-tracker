@@ -2101,43 +2101,48 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
 
   // iOS任务批次兼容：
-  // batch 保存真实抓取批次；taskBatch 代表一次ASO测试周期的起始批次。
-  // 点点可能只有后续抓取批次，因此需要同时参考七麦/点点全部快照。
-  function getIosTaskBatch(row, pool = []) {
-    if (!row) return '';
-
-    const app = row.app || '';
-    const country = row.country || '';
-
+  // batch 保存真实抓取批次；taskBatch 代表一次 ASO 测试周期的起始批次。
+  // 关键：按 App + 国家 + T序号（T1/T2/...）一次性建立映射，避免逐行重复解析 localStorage。
+  function buildIosTaskBatchMap(extraRows = []) {
     const allRows = [
-      ...(Array.isArray(pool) ? pool : []),
       ...safeJsonParse(localStorage.getItem(QIMAI_KEY) || '[]', []),
-      ...safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', [])
+      ...safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', []),
+      ...(Array.isArray(extraRows) ? extraRows : [])
     ];
+    const groups = new Map();
 
-    const batches = [...new Set(
-      allRows
-        .filter(item =>
-          (item.app || '') === app &&
-          (item.country || '') === country &&
-          item.batch
-        )
-        .map(item => item.batch)
-    )];
+    allRows.forEach(item => {
+      const batch = String(item?.batch || '').trim();
+      if (!batch) return;
+      const app = String(item?.app || '').trim();
+      const country = String(item?.country || '').trim();
+      const match = batch.match(/^(T\d+)-(\d{8})$/i);
+      const round = match ? match[1].toUpperCase() : batch;
+      const date = match ? match[2] : '99999999';
+      const key = `${app}|${country}|${round}`;
+      const current = groups.get(key);
+      if (!current || date < current.date) groups.set(key, { batch, date });
+    });
 
-    if (!batches.length) return row.taskBatch || row.batch || '';
+    const result = new Map();
+    groups.forEach((value, key) => result.set(key, value.batch));
+    return result;
+  }
 
-    const dated = batches.map(batch => {
-      const m = String(batch).match(/T1-(\d{8})/);
-      return { batch, date: m ? m[1] : '99999999' };
-    }).sort((a,b) => a.date.localeCompare(b.date));
-
-    return dated[0]?.batch || row.taskBatch || row.batch || '';
+  function getIosTaskBatch(row, taskBatchMap) {
+    if (!row) return '';
+    const batch = String(row.batch || '').trim();
+    if (!batch) return row.taskBatch || '';
+    const match = batch.match(/^(T\d+)-(\d{8})$/i);
+    const round = match ? match[1].toUpperCase() : batch;
+    const key = `${String(row.app || '').trim()}|${String(row.country || '').trim()}|${round}`;
+    return taskBatchMap?.get(key) || row.taskBatch || batch;
   }
 
   function decorateIosTaskBatch(rows) {
-    const pool = rows || [];
-    return pool.map(row => ({...row, taskBatch:getIosTaskBatch(row, pool)}));
+    const pool = Array.isArray(rows) ? rows : [];
+    const taskBatchMap = buildIosTaskBatchMap(pool);
+    return pool.map(row => ({ ...row, taskBatch:getIosTaskBatch(row, taskBatchMap) }));
   }
 
   function renderIosSelectors() {
