@@ -2942,9 +2942,37 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
 
   // ---------------- iOS 点点与交叉验证 ----------------
+  function inferDiandianTrackingBatches(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const groups = new Map();
+    list.forEach(row => {
+      const key = [
+        row.app || '',
+        row.appStoreId || '',
+        row.country || ''
+      ].join('|');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+    groups.forEach(group => {
+      const batches = group
+        .map(item => String(item.batch || '').trim())
+        .filter(item => /^T\\d-\\d{8}$/i.test(item))
+        .sort();
+      const firstBatch = batches[0] || '';
+      group.forEach(item => {
+        item.trackingBatch = firstBatch || item.batch || '';
+        item.captureBatch = item.batch || item.captureBatch || '';
+      });
+    });
+    return list;
+  }
+
   function getDiandianSnapshots() {
     const parsed = safeJsonParse(localStorage.getItem(DIANDIAN_KEY) || '[]', []);
-    return Array.isArray(parsed) ? parsed.map(normalizeDiandianSnapshot).filter(Boolean) : [];
+    if (!Array.isArray(parsed)) return [];
+    const normalized = parsed.map(normalizeDiandianSnapshot).filter(Boolean);
+    return inferDiandianTrackingBatches(normalized);
   }
 
   function saveDiandianSnapshots(snapshots) {
