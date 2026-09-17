@@ -58,7 +58,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     keyword: ''
   };
   const ddFilters = { app:'', batch:'', country:'', date:'', source:'', keyword:'' };
-  const crossFilters = { app:'', batch:'', country:'', keyword:'' }; // batch 字段保留兼容，实际存放跨平台 testId
+  const crossFilters = { app:'', batch:'', country:'', keyword:'' }; // batch字段仅兼容旧版本，实际按testId关联测试任务
   const overviewFilters = {
     platform: localStorage.getItem('aso_overview_platform_v222') || 'all',
     app: localStorage.getItem('aso_overview_app_v222') || '',
@@ -3103,7 +3103,36 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     return [normalizeCrossAppIdentity(row), keyword].join('|');
   }
 
-  function getCrossSourceRows(snapshots) {
+  
+  // iOS 跨平台测试任务 ID 迁移：
+  // 不再使用 AppStoreId 作为唯一测试任务，避免同一 App 多轮 ASO 测试混淆。
+  function ensureIosTestIds() {
+    try {
+      const keys = [QIMAI_KEY, DIANDIAN_KEY];
+      const seedMap = {};
+      keys.forEach(key => {
+        const rows = safeJsonParse(localStorage.getItem(key) || '[]', []);
+        const next = rows.map(row => {
+          if (row.testId) return row;
+          const app = row.app || 'unknown';
+          const country = row.country || 'ALL';
+          const date = String(row.batch || row.date || row.capturedAt || '')
+            .replace(/[^0-9]/g,'')
+            .slice(0,8) || 'unknown';
+          const mapKey = `${app}|${country}|${date}`;
+          if (!seedMap[mapKey]) {
+            seedMap[mapKey] = `${app}-${country}-${date}-001`;
+          }
+          return {...row, testId: seedMap[mapKey]};
+        });
+        localStorage.setItem(key, JSON.stringify(next));
+      });
+    } catch(e) {
+      console.warn('ensureIosTestIds failed', e);
+    }
+  }
+
+function getCrossSourceRows(snapshots) {
     return [...dedupeQimaiRows(snapshots, 'rank_changed'), ...dedupeQimaiRows(snapshots, 'new_entry')]
       .map(row => ({ ...row, keywordNormalized: normalizeCrossKeyword(row.keywordNormalized || row.keyword) }))
       .filter(row => row.keywordNormalized);
@@ -3146,7 +3175,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   function getCrossConclusion(item) {
     const qDir = directionOf(item.q), dDir = directionOf(item.d);
     const contextMismatch = item.q && item.d && (
-      String(item.q.batch || '') !== String(item.d.batch || '') ||
+      String(item.q.testId || item.q.batch || '') !== String(item.d.testId || item.d.batch || '') ||
       String(item.q.country || '') !== String(item.d.country || '')
     );
     if (item.q && item.d && contextMismatch) return '双方均发现；请选择相同批次/国家进一步验证';
@@ -3287,6 +3316,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
 
   function renderCrossValidation() {
+    ensureIosTestIds();
     const qAllRows = getCrossSourceRows(getQimaiSnapshots());
     const dAllRows = getCrossSourceRows(getDiandianSnapshots());
     const allRows = [...qAllRows, ...dAllRows];
