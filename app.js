@@ -2125,7 +2125,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     });
 
     const result = new Map();
-    groups.forEach((value, key) => result.set(key, value.batch));
+    groups.forEach((value, key) => {
+      result.set(key, value.batch);
+      const parts = key.split('|');
+      if (parts.length === 3) {
+        result.set(`${parts[0]}|${parts[2]}`, value.batch);
+        result.set(`${parts[0]}||${parts[2]}`, value.batch);
+      }
+    });
     return result;
   }
 
@@ -2133,10 +2140,25 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     if (!row) return '';
     const batch = String(row.batch || '').trim();
     if (!batch) return row.taskBatch || '';
+
+    // 优先保留已有任务批次
+    if (row.taskBatch) return row.taskBatch;
+
     const match = batch.match(/^(T\d+)-(\d{8})$/i);
     const round = match ? match[1].toUpperCase() : batch;
-    const key = `${String(row.app || '').trim()}|${String(row.country || '').trim()}|${round}`;
-    return taskBatchMap?.get(key) || row.taskBatch || batch;
+    const app = String(row.app || '').trim();
+    const country = String(row.country || '').trim();
+
+    // 精确匹配
+    const exact = taskBatchMap?.get(`${app}|${country}|${round}`);
+    if (exact) return exact;
+
+    // 兼容点点历史数据：部分点点快照国家字段为空或格式不同
+    const loose = taskBatchMap?.get(`${app}||${round}`);
+    if (loose) return loose;
+
+    // 最后兜底：同 App + 同 T 周期取最早日期作为任务批次
+    return taskBatchMap?.get(`${app}|${round}`) || batch;
   }
 
   function decorateIosTaskBatch(rows) {
