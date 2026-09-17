@@ -58,7 +58,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     keyword: ''
   };
   const ddFilters = { app:'', batch:'', country:'', date:'', source:'', keyword:'' };
-  const crossFilters = { app:'', batch:'', country:'', keyword:'' }; // batch字段仅兼容旧版本，实际按testId关联测试任务
+  const crossFilters = { app:'', batch:'', country:'', keyword:'' }; // 按 App + batch + country 匹配，不使用 testId 作为筛选
   const overviewFilters = {
     platform: localStorage.getItem('aso_overview_platform_v222') || 'all',
     app: localStorage.getItem('aso_overview_app_v222') || '',
@@ -3140,7 +3140,10 @@ function getCrossSourceRows(snapshots) {
 
   function crossRowMatchesFilters(row) {
     if (crossFilters.app && row.app !== crossFilters.app) return false;
-    if (crossFilters.batch && (row.testId || row.batch) !== crossFilters.batch) return false;
+    if (crossFilters.batch) {
+      const taskKey = `${row.app || ''}|${row.batch || ''}|${row.country || ''}`;
+      if (taskKey !== crossFilters.batch) return false;
+    }
     if (crossFilters.country && row.country !== crossFilters.country) return false;
     return true;
   }
@@ -3175,7 +3178,7 @@ function getCrossSourceRows(snapshots) {
   function getCrossConclusion(item) {
     const qDir = directionOf(item.q), dDir = directionOf(item.d);
     const contextMismatch = item.q && item.d && (
-      String(item.q.testId || item.q.batch || '') !== String(item.d.testId || item.d.batch || '') ||
+      String(item.q.batch || '') !== String(item.d.batch || '') ||
       String(item.q.country || '') !== String(item.d.country || '')
     );
     if (item.q && item.d && contextMismatch) return '双方均发现；请选择相同批次/国家进一步验证';
@@ -3316,7 +3319,6 @@ function getCrossSourceRows(snapshots) {
   }
 
   function renderCrossValidation() {
-    ensureIosTestIds();
     const qAllRows = getCrossSourceRows(getQimaiSnapshots());
     const dAllRows = getCrossSourceRows(getDiandianSnapshots());
     const allRows = [...qAllRows, ...dAllRows];
@@ -3326,11 +3328,23 @@ function getCrossSourceRows(snapshots) {
     fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
 
     const appScoped = crossFilters.app ? allRows.filter(item => item.app === crossFilters.app) : allRows;
-    const testIds = [...new Set(appScoped.map(item => item.testId || item.batch).filter(Boolean))].sort();
-    if (crossFilters.batch && !testIds.includes(crossFilters.batch)) crossFilters.batch = '';
-    fillSelect('crossBatchSelect', testIds, crossFilters.batch, '全部测试任务');
+    const tasks = [...new Map(
+      appScoped.map(item => {
+        const key = `${item.app || ''}|${item.batch || ''}|${item.country || ''}`;
+        return [key, {
+          value: key,
+          label: `${item.app || ''} | ${item.batch || '无批次'} | ${item.country || 'ALL'}`
+        }];
+      })
+    ).values()].sort((a,b)=>a.label.localeCompare(b.label));
 
-    const batchScoped = crossFilters.batch ? appScoped.filter(item => (item.testId || item.batch) === crossFilters.batch) : appScoped;
+    if (crossFilters.batch && !tasks.some(item => item.value === crossFilters.batch)) crossFilters.batch = '';
+    fillSelect('crossBatchSelect', tasks, crossFilters.batch, '全部测试任务');
+
+    const batchScoped = crossFilters.batch ? appScoped.filter(item => {
+      const key = `${item.app || ''}|${item.batch || ''}|${item.country || ''}`;
+      return key === crossFilters.batch;
+    }) : appScoped;
     const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
     if (crossFilters.country && !countries.includes(crossFilters.country)) crossFilters.country = '';
     fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
