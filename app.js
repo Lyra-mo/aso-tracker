@@ -2960,14 +2960,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     element.innerHTML = options.join('');
   }
 
-  
-  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
-  function getIosTaskRows(rows, selectedTask) {
-    if (!selectedTask || selectedTask === 'all') return rows;
-    return rows.filter(r => (r.testId || r.batch) === selectedTask);
-  }
-
-function renderDiandianSelectors() {
+  function renderDiandianSelectors() {
     const snapshots = getDiandianSnapshots();
     const apps = [...new Set(snapshots.map(item => item.app))].sort();
     if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
@@ -2986,14 +2979,7 @@ function renderDiandianSelectors() {
     fillSelect('ddDateSelect', dates, ddFilters.date, '全部日期');
   }
 
-  
-  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
-  function getIosTaskRows(rows, selectedTask) {
-    if (!selectedTask || selectedTask === 'all') return rows;
-    return rows.filter(r => (r.testId || r.batch) === selectedTask);
-  }
-
-function renderDiandianHistoryChips(history, category) {
+  function renderDiandianHistoryChips(history, category) {
     const items = [...(history || [])].slice(-5);
     return `<div class="ios-history-chips">${items.map(item => {
       const status = category === 'new_entry' ? '新进榜' : (item.rankChangeText || '—');
@@ -3005,14 +2991,7 @@ function renderDiandianHistoryChips(history, category) {
     return iosKeywordEntityKey(row);
   }
 
-  
-  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
-  function getIosTaskRows(rows, selectedTask) {
-    if (!selectedTask || selectedTask === 'all') return rows;
-    return rows.filter(r => (r.testId || r.batch) === selectedTask);
-  }
-
-function renderDiandianTrend(rows = ddCurrentRows) {
+  function renderDiandianTrend(rows = ddCurrentRows) {
     const empty = document.getElementById('ddTrendEmpty');
     const chartEl = document.getElementById('ddTrendChart');
     const clearBtn = document.getElementById('ddTrendClearBtn');
@@ -3048,14 +3027,7 @@ function renderDiandianTrend(rows = ddCurrentRows) {
     setTimeout(() => ddTrendChart.resize(), 30);
   }
 
-  
-  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
-  function getIosTaskRows(rows, selectedTask) {
-    if (!selectedTask || selectedTask === 'all') return rows;
-    return rows.filter(r => (r.testId || r.batch) === selectedTask);
-  }
-
-function renderDiandianDashboard() {
+  function renderDiandianDashboard() {
     renderDiandianSelectors();
     updateIosTaskDeleteButtons();
     document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
@@ -3141,7 +3113,7 @@ function renderDiandianDashboard() {
       keys.forEach(key => {
         const rows = safeJsonParse(localStorage.getItem(key) || '[]', []);
         const next = rows.map(row => {
-          if (row.testId && !String(row.testId).startsWith('ios:')) return row;
+          if (row.testId) return row;
           const app = row.app || 'unknown';
           const country = row.country || 'ALL';
           const date = String(row.batch || row.date || row.capturedAt || '')
