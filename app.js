@@ -2962,9 +2962,23 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       .map(value => String(value || '').trim().toLowerCase()).join('__');
   }
 
+
+  function getTaskBatchFromTaskId(taskId) {
+    const value = String(taskId || '').trim();
+    const match = value.match(/t\d-\d{8}/i);
+    return match ? match[0].toUpperCase() : '';
+  }
+
   function normalizeDiandianSnapshot(snapshot) {
     const normalized = normalizeQimaiSnapshot(snapshot);
     if (!normalized) return null;
+    // 点点历史数据的 batch 字段可能保存为任务创建批次，
+    // 实际抓取批次保存在 taskId 中，优先使用 taskId 解析结果。
+    const taskBatch = getTaskBatchFromTaskId(snapshot.taskId || normalized.taskId);
+    if (taskBatch) {
+      normalized.captureBatch = normalized.batch;
+      normalized.batch = taskBatch;
+    }
     normalized.source = 'diandian_ios';
     normalized.changedResults = normalized.changedResults.map((row,index) => ({
       ...row,
