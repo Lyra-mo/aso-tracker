@@ -3296,11 +3296,11 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     fillSelect('crossAppSelect', apps, crossFilters.app, '全部 App');
 
     const appScoped = crossFilters.app ? allRows.filter(item => item.app === crossFilters.app) : allRows;
-    const batches = [...new Set(appScoped.map(item => item.batch).filter(Boolean))].sort();
-    if (crossFilters.batch && !batches.includes(crossFilters.batch)) crossFilters.batch = '';
-    fillSelect('crossBatchSelect', batches, crossFilters.batch, '全部批次');
+    const testIds = [...new Set(appScoped.map(item => item.testId || item.batch).filter(Boolean))].sort();
+    if (crossFilters.batch && !testIds.includes(crossFilters.batch)) crossFilters.batch = '';
+    fillSelect('crossBatchSelect', testIds, crossFilters.batch, '全部测试任务');
 
-    const batchScoped = crossFilters.batch ? appScoped.filter(item => item.batch === crossFilters.batch) : appScoped;
+    const batchScoped = crossFilters.batch ? appScoped.filter(item => (item.testId || item.batch) === crossFilters.batch) : appScoped;
     const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
     if (crossFilters.country && !countries.includes(crossFilters.country)) crossFilters.country = '';
     fillSelect('crossCountrySelect', countries, crossFilters.country, '全部国家');
