@@ -3052,7 +3052,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
     fillSelect('ddAppSelect', apps, ddFilters.app, '全部 App');
     const scopedApp = ddFilters.app ? snapshots.filter(item => item.app === ddFilters.app) : snapshots;
-    const batches = [...new Set(scopedApp.map(item => item.taskBatch || item.batch))].sort();
+    const batches = [...new Set(scopedApp.map(item => item.trackingBatch || item.taskBatch || item.batch))].sort();
     if (ddFilters.batch && !batches.includes(ddFilters.batch)) ddFilters.batch = '';
     fillSelect('ddBatchSelect', batches, ddFilters.batch, '全部批次');
     const scopedBatch = ddFilters.batch ? scopedApp.filter(item => (item.trackingBatch || item.taskBatch || item.batch) === ddFilters.batch) : scopedApp;
