@@ -58,7 +58,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     keyword: ''
   };
   const ddFilters = { app:'', batch:'', country:'', date:'', source:'', keyword:'' };
-  const crossFilters = { app:'', batch:'', country:'', keyword:'' };
+  const crossFilters = { app:'', batch:'', country:'', keyword:'' }; // batch 字段保留兼容，实际存放跨平台 testId
   const overviewFilters = {
     platform: localStorage.getItem('aso_overview_platform_v222') || 'all',
     app: localStorage.getItem('aso_overview_app_v222') || '',
@@ -1836,6 +1836,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       app: String(row.app || snapshot.app || '未命名 iOS App').trim(),
       appStoreId: String(row.appStoreId || snapshot.appStoreId || '').trim(),
       batch: String(row.batch || snapshot.batch || '未命名批次').trim(),
+      testId: String(row.testId || snapshot.testId || deriveIosTestId(snapshot)).trim(),
       country: String(row.country || snapshot.country || '').trim().toUpperCase(),
       date: toDateKey(snapshot.date || row.currentDate),
       compareDate: toDateKey(snapshot.compareDate || row.compareDate || addDateDays(snapshot.date, -1)),
@@ -1855,6 +1856,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     };
   }
 
+  function deriveIosTestId(snapshot = {}) {
+    const appStoreId = String(snapshot.appStoreId || snapshot.config?.appStoreId || '').replace(/\D/g, '');
+    const country = String(snapshot.country || snapshot.config?.country || '').trim().toUpperCase();
+    const app = String(snapshot.app || snapshot.config?.app || 'unknown-app').trim();
+    // 跨平台关联使用 testId；保留原 batch 作为平台抓取批次。
+    return appStoreId ? `ios:${appStoreId}:${country}` : `ios:${app}:${country}`;
+  }
+
   function normalizeQimaiSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return null;
     const changedSource = Array.isArray(snapshot.changedResults) ? snapshot.changedResults : [];
@@ -1869,6 +1878,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       app: String(snapshot.app || snapshot.config?.app || '未命名 iOS App').trim(),
       appStoreId: String(snapshot.appStoreId || snapshot.config?.appStoreId || '').trim(),
       batch: String(snapshot.batch || snapshot.config?.batch || '未命名批次').trim(),
+      testId: String(snapshot.testId || snapshot.config?.testId || deriveIosTestId(snapshot)).trim(),
       country: String(snapshot.country || snapshot.config?.country || '').trim().toUpperCase(),
       day: numberOrNull(snapshot.day || snapshot.config?.autoDay),
       date,
@@ -3101,7 +3111,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
   function crossRowMatchesFilters(row) {
     if (crossFilters.app && row.app !== crossFilters.app) return false;
-    if (crossFilters.batch && row.batch !== crossFilters.batch) return false;
+    if (crossFilters.batch && (row.testId || row.batch) !== crossFilters.batch) return false;
     if (crossFilters.country && row.country !== crossFilters.country) return false;
     return true;
   }
@@ -3264,7 +3274,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     [
       ['导出范围',onlyBoth?'双方都有':'当前全部'],
       ['App',crossFilters.app||'全部 App'],
-      ['测试批次',crossFilters.batch||'全部批次'],
+      ['测试任务',crossFilters.batch||'全部测试任务'],
       ['国家',crossFilters.country||'全部国家'],
       ['关键词搜索',crossFilters.keyword||'无'],
       ['指数门槛',`≥ ${IOS_MIN_INDEX}`],
