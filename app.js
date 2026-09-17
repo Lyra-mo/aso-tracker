@@ -3503,6 +3503,43 @@ function initDiandianEvents() {
     };
   };
 
+
+  // iOS 历史批次修复工具（仅手动调用，不自动执行）
+  // 用于修复因同步日期误生成 Batch 导致的 T1-日期 分裂问题。
+  // 示例：ASO_FIX_IOS_BATCH({apps:['iOS5-AllRemote'], from:['T1-20260728','T1-20260814'], to:'T1-20260722'})
+  window.ASO_FIX_IOS_BATCH = function(options = {}) {
+    const apps = Array.isArray(options.apps) ? options.apps.map(v => String(v)) : [];
+    const from = Array.isArray(options.from) ? options.from.map(v => String(v)) : [];
+    const to = String(options.to || '').trim();
+    if (!apps.length || !from.length || !to) {
+      return { ok:false, message:'需要 apps、from、to 参数' };
+    }
+
+    const raw = safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []);
+    if (!Array.isArray(raw)) return { ok:false, message:'数据不存在' };
+
+    const backupKey = 'aso_batch_fix_backup_' + Date.now();
+    localStorage.setItem(backupKey, JSON.stringify(raw));
+
+    let changed = 0;
+    raw.forEach(item => {
+      const app = String(item.App || '').trim();
+      const batch = String(item.Batch || item.batchName || '').trim();
+      if (apps.includes(app) && from.includes(batch)) {
+        item.Batch = to;
+        changed++;
+      }
+    });
+
+    saveMasterData(raw);
+    return {
+      ok:true,
+      changed,
+      backupKey,
+      message:`已合并 ${changed} 条记录到 ${to}`
+    };
+  };
+
   function initStFilterEvents() {
     const groupSelect = document.getElementById('appGroupSelect');
     const appSelect = document.getElementById('appSelect');
