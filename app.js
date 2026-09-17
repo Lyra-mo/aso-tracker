@@ -2972,12 +2972,15 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   function normalizeDiandianSnapshot(snapshot) {
     const normalized = normalizeQimaiSnapshot(snapshot);
     if (!normalized) return null;
-    // 点点历史数据的 batch 字段可能保存为任务创建批次，
-    // 实际抓取批次保存在 taskId 中，优先使用 taskId 解析结果。
+    // 点点需要区分：追踪批次（实验开始批次）与实际抓取批次。
+    // batch 保留原始抓取归属；trackingBatch 用于页面筛选和交叉验证。
     const taskBatch = getTaskBatchFromTaskId(snapshot.taskId || normalized.taskId);
     if (taskBatch) {
+      normalized.trackingBatch = normalized.batch || taskBatch;
+      normalized.captureBatch = taskBatch;
+    } else {
+      normalized.trackingBatch = normalized.batch;
       normalized.captureBatch = normalized.batch;
-      normalized.batch = taskBatch;
     }
     normalized.source = 'diandian_ios';
     normalized.changedResults = normalized.changedResults.map((row,index) => ({
@@ -3025,7 +3028,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   function getFilteredDiandianRows() {
     let rows = dedupeQimaiRows(decorateIosTaskBatch(getDiandianSnapshots()), ddCategory);
     if (ddFilters.app) rows = rows.filter(item => item.app === ddFilters.app);
-    if (ddFilters.batch) rows = rows.filter(item => (item.taskBatch || item.batch) === ddFilters.batch);
+    if (ddFilters.batch) rows = rows.filter(item => (item.trackingBatch || item.taskBatch || item.batch) === ddFilters.batch);
     if (ddFilters.country) rows = rows.filter(item => item.country === ddFilters.country);
     if (ddFilters.date) rows = rows.filter(item => item.date === ddFilters.date);
     const sourceQuery = ddFilters.source.trim().toLowerCase();
@@ -3052,7 +3055,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const batches = [...new Set(scopedApp.map(item => item.taskBatch || item.batch))].sort();
     if (ddFilters.batch && !batches.includes(ddFilters.batch)) ddFilters.batch = '';
     fillSelect('ddBatchSelect', batches, ddFilters.batch, '全部批次');
-    const scopedBatch = ddFilters.batch ? scopedApp.filter(item => (item.taskBatch || item.batch) === ddFilters.batch) : scopedApp;
+    const scopedBatch = ddFilters.batch ? scopedApp.filter(item => (item.trackingBatch || item.taskBatch || item.batch) === ddFilters.batch) : scopedApp;
     const countries = [...new Set(scopedBatch.map(item => item.country))].sort();
     if (ddFilters.country && !countries.includes(ddFilters.country)) ddFilters.country = '';
     fillSelect('ddCountrySelect', countries, ddFilters.country, '全部国家');
@@ -3225,7 +3228,7 @@ function getCrossSourceRows(snapshots) {
   function crossRowMatchesFilters(row) {
     if (crossFilters.app && row.app !== crossFilters.app) return false;
     if (crossFilters.batch) {
-      const taskKey = `${row.app || ''}|${row.taskBatch || row.batch || ''}|${row.country || ''}`;
+      const taskKey = `${row.app || ''}|${row.trackingBatch || row.taskBatch || row.batch || ''}|${row.country || ''}`;
       if (taskKey !== crossFilters.batch) return false;
     }
     if (crossFilters.country && row.country !== crossFilters.country) return false;
@@ -3262,7 +3265,7 @@ function getCrossSourceRows(snapshots) {
   function getCrossConclusion(item) {
     const qDir = directionOf(item.q), dDir = directionOf(item.d);
     const contextMismatch = item.q && item.d && (
-      String(item.q.taskBatch || item.q.batch || '') !== String(item.d.taskBatch || item.d.batch || '') ||
+      String(item.q.trackingBatch || item.q.taskBatch || item.q.batch || '') !== String(item.d.trackingBatch || item.d.taskBatch || item.d.batch || '') ||
       String(item.q.country || '') !== String(item.d.country || '')
     );
     if (item.q && item.d && contextMismatch) return '双方均发现；请选择相同批次/国家进一步验证';
@@ -3414,10 +3417,10 @@ function getCrossSourceRows(snapshots) {
     const appScoped = crossFilters.app ? allRows.filter(item => item.app === crossFilters.app) : allRows;
     const tasks = [...new Map(
       appScoped.map(item => {
-        const key = `${item.app || ''}|${item.taskBatch || item.batch || ''}|${item.country || ''}`;
+        const key = `${item.app || ''}|${item.trackingBatch || item.taskBatch || item.batch || ''}|${item.country || ''}`;
         return [key, {
           value: key,
-          label: `${item.app || ''} | ${item.taskBatch || item.batch || '无批次'} | ${item.country || 'ALL'}`
+          label: `${item.app || ''} | ${item.trackingBatch || item.taskBatch || item.batch || '无批次'} | ${item.country || 'ALL'}`
         }];
       })
     ).values()].sort((a,b)=>a.label.localeCompare(b.label));
@@ -3426,7 +3429,7 @@ function getCrossSourceRows(snapshots) {
     fillSelect('crossBatchSelect', tasks, crossFilters.batch, '全部测试任务');
 
     const batchScoped = crossFilters.batch ? appScoped.filter(item => {
-      const key = `${item.app || ''}|${item.taskBatch || item.batch || ''}|${item.country || ''}`;
+      const key = `${item.app || ''}|${item.trackingBatch || item.taskBatch || item.batch || ''}|${item.country || ''}`;
       return key === crossFilters.batch;
     }) : appScoped;
     const countries = [...new Set(batchScoped.map(item => item.country).filter(Boolean))].sort();
