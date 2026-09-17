@@ -2960,7 +2960,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     element.innerHTML = options.join('');
   }
 
-  function renderDiandianSelectors() {
+  
+  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
+  function getIosTaskRows(rows, selectedTask) {
+    if (!selectedTask || selectedTask === 'all') return rows;
+    return rows.filter(r => (r.testId || r.batch) === selectedTask);
+  }
+
+function renderDiandianSelectors() {
     const snapshots = getDiandianSnapshots();
     const apps = [...new Set(snapshots.map(item => item.app))].sort();
     if (ddFilters.app && !apps.includes(ddFilters.app)) ddFilters.app = '';
@@ -2979,7 +2986,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     fillSelect('ddDateSelect', dates, ddFilters.date, '全部日期');
   }
 
-  function renderDiandianHistoryChips(history, category) {
+  
+  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
+  function getIosTaskRows(rows, selectedTask) {
+    if (!selectedTask || selectedTask === 'all') return rows;
+    return rows.filter(r => (r.testId || r.batch) === selectedTask);
+  }
+
+function renderDiandianHistoryChips(history, category) {
     const items = [...(history || [])].slice(-5);
     return `<div class="ios-history-chips">${items.map(item => {
       const status = category === 'new_entry' ? '新进榜' : (item.rankChangeText || '—');
@@ -2991,7 +3005,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     return iosKeywordEntityKey(row);
   }
 
-  function renderDiandianTrend(rows = ddCurrentRows) {
+  
+  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
+  function getIosTaskRows(rows, selectedTask) {
+    if (!selectedTask || selectedTask === 'all') return rows;
+    return rows.filter(r => (r.testId || r.batch) === selectedTask);
+  }
+
+function renderDiandianTrend(rows = ddCurrentRows) {
     const empty = document.getElementById('ddTrendEmpty');
     const chartEl = document.getElementById('ddTrendChart');
     const clearBtn = document.getElementById('ddTrendClearBtn');
@@ -3027,7 +3048,14 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     setTimeout(() => ddTrendChart.resize(), 30);
   }
 
-  function renderDiandianDashboard() {
+  
+  // iOS点点页面支持测试任务筛选：testId关联不同平台batch
+  function getIosTaskRows(rows, selectedTask) {
+    if (!selectedTask || selectedTask === 'all') return rows;
+    return rows.filter(r => (r.testId || r.batch) === selectedTask);
+  }
+
+function renderDiandianDashboard() {
     renderDiandianSelectors();
     updateIosTaskDeleteButtons();
     document.querySelectorAll('[data-dd-category]').forEach(button => button.classList.toggle('active', button.dataset.ddCategory === ddCategory));
@@ -3113,7 +3141,7 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       keys.forEach(key => {
         const rows = safeJsonParse(localStorage.getItem(key) || '[]', []);
         const next = rows.map(row => {
-          if (row.testId) return row;
+          if (row.testId && !String(row.testId).startsWith('ios:')) return row;
           const app = row.app || 'unknown';
           const country = row.country || 'ALL';
           const date = String(row.batch || row.date || row.capturedAt || '')
