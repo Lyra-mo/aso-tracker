@@ -15,7 +15,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.3.21';
+  const DASHBOARD_VERSION = '2.3.22';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
   // ST auto tracking compatibility (v2.3.21)
   // Keeps old dashboards compatible with future plugin auto-tracking tasks.
@@ -258,8 +258,28 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
   function cleanupTrash() {
     const now = Date.now();
-    const kept = getTrashRecords().filter(item => now - Number(item.deletedAt || now) < 21*24*60*60*1000);
-    saveTrashRecords(kept);
+    const MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+    const MAX_COUNT = 50;
+
+    const clean = (list) => {
+      return (Array.isArray(list) ? list : [])
+        .filter(item => now - Number(item.deletedAt || now) < MAX_AGE)
+        .sort((a,b)=>Number(b.deletedAt||0)-Number(a.deletedAt||0))
+        .slice(0, MAX_COUNT);
+    };
+
+    // 主回收站
+    saveTrashRecords(clean(
+      safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', [])
+    ));
+
+    // ST 专用回收站
+    localStorage.setItem(
+      'aso_st_trash_v1',
+      JSON.stringify(
+        clean(safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []))
+      )
+    );
   }
   function deleteAppTracking(app) {
     if (!app) return;
