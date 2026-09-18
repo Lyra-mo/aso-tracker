@@ -247,7 +247,11 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
 
   function getTrashRecords() {
-    return safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
+    const mainTrash = safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
+    // 合并 ST 专用回收记录，兼容旧版本删除链路
+    const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', [])
+      .map(item => ({ ...item, _trashSource: 'st' }));
+    return [...mainTrash, ...stTrash];
   }
   function saveTrashRecords(list) {
     localStorage.setItem(TRASH_KEY, JSON.stringify(list || []));
@@ -352,8 +356,21 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     }
 
 
-    trash.splice(index,1);
-    saveTrashRecords(trash);
+    const removedItem = trash.splice(index,1)[0];
+
+    if (removedItem && removedItem._trashSource === 'st') {
+      const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
+      const pos = stTrash.findIndex(x =>
+        x.deletedAt === removedItem.deletedAt &&
+        (x.key === removedItem.key || x.app === removedItem.app)
+      );
+      if (pos >= 0) {
+        stTrash.splice(pos, 1);
+        localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
+      }
+    } else {
+      saveTrashRecords(trash);
+    }
 
     renderDashboard();
     renderOverview();
