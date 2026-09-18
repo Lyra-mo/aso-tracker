@@ -319,7 +319,11 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
     const current = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
 
-    if (item.type === 'qimai_task') {
+    if (item.type === 'storage_key') {
+      if (item.key) {
+        localStorage.setItem(item.key, item.rawData || '[]');
+      }
+    } else if (item.type === 'qimai_task') {
       saveQimaiSnapshots([
         ...getQimaiSnapshots(),
         ...(item.records || [])
@@ -2364,6 +2368,20 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     saveTrashRecords(trash);
   }
 
+
+  function moveStorageKeyToTrash(type, key, label){
+    const raw = localStorage.getItem(key);
+    if (raw === null) return false;
+    moveToTrashRecord({
+      type: type || 'storage_key',
+      key,
+      label: label || key,
+      rawData: raw
+    });
+    localStorage.removeItem(key);
+    return true;
+  }
+
   function deleteCurrentQimaiTask() {
     if (!iosTaskScopeReady(iosFilters)) {
       alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
@@ -3544,7 +3562,11 @@ function initDiandianEvents() {
     document.getElementById('crossTrendCloseBtn')?.addEventListener('click', () => { crossSelectedKey=''; renderCrossValidation(); });
     document.getElementById('exportCrossBothBtn')?.addEventListener('click', () => exportCrossValidationExcel(true));
     document.getElementById('exportCrossAllBtn')?.addEventListener('click', () => exportCrossValidationExcel(false));
-    document.getElementById('clearDiandianBtn')?.addEventListener('click', () => { if(!confirm('确定清空全部 iOS 点点快照吗？ST 和七麦数据不会受影响。'))return; localStorage.removeItem(DIANDIAN_KEY); renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); });
+    document.getElementById('clearDiandianBtn')?.addEventListener('click', () => {
+      if(!confirm('确定清空全部 iOS 点点快照吗？数据将进入回收站。'))return;
+      moveStorageKeyToTrash('diandian_storage', DIANDIAN_KEY, 'iOS 点点快照');
+      renderDiandianDashboard(); renderCrossValidation(); renderStorageSummary(); renderTrashPanel();
+    });
   }
 
   function initDataCenterEvents() {
@@ -3579,8 +3601,17 @@ function initDiandianEvents() {
     document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
     document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
     document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
-    document.getElementById('clearIosBtn').addEventListener('click', () => { if(!confirm('确定清空全部 iOS 七麦快照吗？ST 数据不会受影响。'))return; localStorage.removeItem(QIMAI_KEY); selectedIosKeywords.clear(); saveIosSelection(); renderIosDashboard(); renderOverview(); renderStorageSummary(); });
-    document.getElementById('clearSyncLogsBtn').addEventListener('click', () => { if(!confirm('确定清空同步日志吗？关键词数据不会删除。'))return; localStorage.removeItem(SYNC_LOG_KEY); renderOverview(); renderStorageSummary(); });
+    document.getElementById('clearIosBtn').addEventListener('click', () => {
+      if(!confirm('确定清空全部 iOS 七麦快照吗？数据将进入回收站。'))return;
+      moveStorageKeyToTrash('qimai_storage', QIMAI_KEY, 'iOS 七麦快照');
+      selectedIosKeywords.clear(); saveIosSelection();
+      renderIosDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+    });
+    document.getElementById('clearSyncLogsBtn').addEventListener('click', () => {
+      if(!confirm('确定清空同步日志吗？数据将进入回收站。'))return;
+      moveStorageKeyToTrash('sync_logs', SYNC_LOG_KEY, '同步日志');
+      renderOverview(); renderStorageSummary(); renderTrashPanel();
+    });
   }
 
 
