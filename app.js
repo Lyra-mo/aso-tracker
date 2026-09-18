@@ -3833,11 +3833,16 @@ function initDiandianEvents() {
         return;
       }
       if (!confirm(`确定删除当前 App 数据？\n\nApp：${currentApp}\n数据量：${removed.length} 条\n\n将移动到临时回收区。`)) return;
-      const trash = JSON.parse(localStorage.getItem('aso_trash_data') || '[]');
-      trash.push({app: currentApp, deletedAt: new Date().toISOString(), data: removed});
-      localStorage.setItem('aso_trash_data', JSON.stringify(trash));
+      // 统一进入回收站（使用 aso_deleted_tracking_trash_v1）
+      // 避免旧版 aso_trash_data 与数据管理回收站分离
+      moveToTrashRecord({
+        type:'st_app',
+        app: currentApp,
+        records: removed,
+        deletedAt: Date.now()
+      });
       const remain = allData.filter(item => !(item.App === currentApp || item.app === currentApp));
-      localStorage.setItem(MASTER_KEY, JSON.stringify(remain));
+      saveMasterData(remain);
       renderDashboard();
       renderOverview();
       renderStorageSummary();
