@@ -2372,12 +2372,31 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   function moveStorageKeyToTrash(type, key, label){
     const raw = localStorage.getItem(key);
     if (raw === null) return false;
-    moveToTrashRecord({
+
+    const record = {
       type: type || 'storage_key',
       key,
       label: label || key,
       rawData: raw
-    });
+    };
+
+    // 主回收站
+    moveToTrashRecord(record);
+
+    // ST单独备份，避免旧版本删除链路丢失
+    if (key === MASTER_KEY) {
+      try {
+        const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
+        stTrash.push({
+          ...record,
+          deletedAt: Date.now()
+        });
+        localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
+      } catch(e) {
+        console.warn('ST recycle backup failed', e);
+      }
+    }
+
     localStorage.removeItem(key);
     return true;
   }
