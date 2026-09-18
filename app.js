@@ -319,10 +319,22 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
 
     const current = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
 
-    saveMasterData([
-      ...current,
-      ...(item.records || [])
-    ]);
+    if (item.type === 'qimai_task') {
+      saveQimaiSnapshots([
+        ...getQimaiSnapshots(),
+        ...(item.records || [])
+      ]);
+    } else if (item.type === 'diandian_task') {
+      saveDiandianSnapshots([
+        ...getDiandianSnapshots(),
+        ...(item.records || [])
+      ]);
+    } else {
+      saveMasterData([
+        ...current,
+        ...(item.records || [])
+      ]);
+    }
 
 
     // 恢复 ST 状态
@@ -2346,6 +2358,12 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     }
   }
 
+  function moveToTrashRecord(item){
+    const trash=getTrashRecords();
+    trash.push({...item, deletedAt: Date.now()});
+    saveTrashRecords(trash);
+  }
+
   function deleteCurrentQimaiTask() {
     if (!iosTaskScopeReady(iosFilters)) {
       alert('请先选择具体的 App、测试批次和国家，再删除当前任务。');
@@ -2354,31 +2372,21 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const { app, batch, country } = iosFilters;
     const snapshots = getQimaiSnapshots();
     const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
-    if (!matched.length) {
-      alert('当前 App / 批次 / 国家下没有可删除的七麦任务快照。');
-      return;
-    }
-    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
-    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
-    if (!confirm(`确定彻底删除当前七麦任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或点点数据。建议先导出全部 JSON。`)) return;
+    if (!matched.length) return alert('当前 App / 批次 / 国家下没有可删除的七麦任务快照。');
 
-    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
-    saveQimaiSnapshots(next);
+    if (!confirm(`确定移入回收站？\n\n七麦任务：${app}｜${batch}｜${country}\n快照：${matched.length} 个\n\n可在回收站恢复。`)) return;
+
+    moveToTrashRecord({type:'qimai_task', app, batch, country, records:matched});
+    saveQimaiSnapshots(snapshots.filter(snapshot => !matched.includes(snapshot)));
+
     selectedIosKeywords.clear();
     saveIosSelection();
-    iosFilters.date = '';
-    iosFilters.source = '';
-    iosFilters.keyword = '';
-    const sourceInput = document.getElementById('iosSourceInput');
-    const keywordInput = document.getElementById('iosKeywordInput');
-    if (sourceInput) sourceInput.value = '';
-    if (keywordInput) keywordInput.value = '';
-    addSyncLog({ source:'qimai_ios', status:'success', message:`已删除七麦任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
     renderIosDashboard();
     renderCrossValidation();
     renderOverview();
     renderStorageSummary();
-    alert(`已删除七麦任务：${app}｜${batch}｜${country}。`);
+    renderTrashPanel();
+    alert('已移入回收站');
   }
 
   function deleteCurrentDiandianTask() {
@@ -2389,30 +2397,20 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const { app, batch, country } = ddFilters;
     const snapshots = getDiandianSnapshots();
     const matched = snapshots.filter(snapshot => snapshot.app === app && snapshot.batch === batch && snapshot.country === country);
-    if (!matched.length) {
-      alert('当前 App / 批次 / 国家下没有可删除的点点任务快照。');
-      return;
-    }
-    const dates = [...new Set(matched.map(item => item.date).filter(Boolean))].sort((a,b)=>parseDate(a)-parseDate(b));
-    const dateText = dates.length ? `${dates[0]} ～ ${dates[dates.length-1]}（${dates.length} 天）` : '无日期';
-    if (!confirm(`确定彻底删除当前点点任务吗？\n\nApp：${app}\n批次：${batch}\n国家：${country}\n快照：${matched.length} 个\n日期：${dateText}\n\n这会删除该任务全部日期快照（含空结果快照），不会影响其他批次、国家、ST 或七麦数据。建议先导出全部 JSON。`)) return;
+    if (!matched.length) return alert('当前 App / 批次 / 国家下没有可删除的点点任务快照。');
 
-    const next = snapshots.filter(snapshot => !(snapshot.app === app && snapshot.batch === batch && snapshot.country === country));
-    saveDiandianSnapshots(next);
+    if (!confirm(`确定移入回收站？\n\n点点任务：${app}｜${batch}｜${country}\n快照：${matched.length} 个\n\n可在回收站恢复。`)) return;
+
+    moveToTrashRecord({type:'diandian_task', app, batch, country, records:matched});
+    saveDiandianSnapshots(snapshots.filter(snapshot => !matched.includes(snapshot)));
+
     ddSelectedTrendKey = '';
-    ddFilters.date = '';
-    ddFilters.source = '';
-    ddFilters.keyword = '';
-    const sourceInput = document.getElementById('ddSourceInput');
-    const keywordInput = document.getElementById('ddKeywordInput');
-    if (sourceInput) sourceInput.value = '';
-    if (keywordInput) keywordInput.value = '';
-    addSyncLog({ source:'diandian_ios', status:'success', message:`已删除点点任务：${app}｜${batch}｜${country}，共 ${matched.length} 个日期快照。` });
     renderDiandianDashboard();
     renderCrossValidation();
     renderOverview();
     renderStorageSummary();
-    alert(`已删除点点任务：${app}｜${batch}｜${country}。`);
+    renderTrashPanel();
+    alert('已移入回收站');
   }
 
   function sortIndexRows(rows, direction) {
