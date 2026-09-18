@@ -3601,6 +3601,12 @@ function initDiandianEvents() {
     document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
     document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
     document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
+    document.getElementById('clearStBtn')?.addEventListener('click', () => {
+      if(!confirm('确定清空全部 Sensor Tower 数据吗？数据将进入回收站。')) return;
+      moveStorageKeyToTrash('st_storage', MASTER_KEY, 'Sensor Tower 数据');
+      renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+      alert('已移入回收站');
+    });
     document.getElementById('clearIosBtn').addEventListener('click', () => {
       if(!confirm('确定清空全部 iOS 七麦快照吗？数据将进入回收站。'))return;
       moveStorageKeyToTrash('qimai_storage', QIMAI_KEY, 'iOS 七麦快照');
