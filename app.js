@@ -15,8 +15,12 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.3.22';
+  const DASHBOARD_VERSION = '2.3.23';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
+  // 关键词清单护栏（v2.3.23）：只接收任务自身关键词清单内的 ST 行。
+  const ST_KEYWORD_WHITELIST_KEY = 'aso_st_keyword_whitelist_v1';
+  const ST_REJECTED_KEYWORDS_KEY = 'aso_st_rejected_keywords_v1';
+  const ST_REJECTED_KEYWORDS_MAX = 500;
   // ST auto tracking compatibility (v2.3.21)
   // Keeps old dashboards compatible with future plugin auto-tracking tasks.
   const ST_TRACKING_TASKS_KEY = 'aso_st_tracking_tasks_v1';
@@ -496,6 +500,172 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     if (inferredStatuses.length) saveStProcessingStatuses([...getStProcessingStatuses(), ...inferredStatuses]);
     saveMasterData(raw); // normalizeRecords 会自动剔除 Rank=0。
     return inferredStatuses.length;
+  }
+
+  // ---------------- ST 关键词清单护栏（v2.3.23） ----------------
+  // 插件在 ST 载荷中附带任务自身的追踪关键词清单（keywordSource==='task'）时，
+  // 看板只接收清单内的行，避免历史上“其他 App 的关键词行贴上本 App/批次标签”的脏数据。
+  // 未登记清单的 App + 批次一律放行，保证护栏本身不会误伤正常数据。
+  function stKeywordNormalize(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  // 归一化关键词清单：去首尾空白、合并内部空白、丢弃空值、按大小写不敏感去重。
+  function stKeywordNormalizeList(keywords) {
+    const seen = new Set();
+    const list = [];
+    (Array.isArray(keywords) ? keywords : []).forEach(raw => {
+      const keyword = stKeywordNormalize(raw);
+      if (!keyword) return;
+      const lower = keyword.toLowerCase();
+      if (seen.has(lower)) return;
+      seen.add(lower);
+      list.push(keyword);
+    });
+    return list;
+  }
+
+  function stKeywordScopeKey(app, batch, country) {
+    return `${stKeywordNormalize(app)}__${stKeywordNormalize(batch)}__${String(country == null ? '' : country).trim().toUpperCase()}`;
+  }
+
+  // 行身份：与 normalizeRecords 保持一致的 App / Batch / Country 归一化方式。
+  function stKeywordRowScope(item = {}) {
+    return {
+      app: String(item.App || item.app || '未命名 App').trim(),
+      batch: String(item.Batch || item.batchName || '').trim(),
+      country: String(item.Country || item.country || '').trim().toUpperCase()
+    };
+  }
+
+  function getStKeywordWhitelist() {
+    const parsed = safeJsonParse(localStorage.getItem(ST_KEYWORD_WHITELIST_KEY) || '{}', {});
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  }
+
+  function saveStKeywordWhitelist(store) {
+    localStorage.setItem(ST_KEYWORD_WHITELIST_KEY, JSON.stringify(store && typeof store === 'object' ? store : {}));
+  }
+
+  function stKeywordEntryLists(entry) {
+    const lists = entry && typeof entry === 'object' ? entry.lists : null;
+    return lists && typeof lists === 'object' && !Array.isArray(lists) ? lists : {};
+  }
+
+  // 先查精确键；该键没有登记时回退到同一 App + 批次的全部清单并集（兼容国家缺失/为空的行）。
+  function findStKeywordEntry(store, app, batch, country) {
+    const exactKey = stKeywordScopeKey(app, batch, country);
+    if (store && Object.prototype.hasOwnProperty.call(store, exactKey)) return store[exactKey];
+    const prefix = `${stKeywordNormalize(app)}__${stKeywordNormalize(batch)}__`;
+    let merged = null;
+    Object.keys(store || {}).forEach(key => {
+      if (!key.startsWith(prefix)) return;
+      if (!merged) merged = { lists: {} };
+      const lists = stKeywordEntryLists(store[key]);
+      Object.keys(lists).forEach(listId => {
+        const current = lists[listId] && typeof lists[listId] === 'object' ? lists[listId] : {};
+        const previous = merged.lists[listId] || { keywords: [], updatedAt: '' };
+        merged.lists[listId] = {
+          keywords: [...previous.keywords, ...(Array.isArray(current.keywords) ? current.keywords : [])],
+          updatedAt: current.updatedAt || previous.updatedAt || ''
+        };
+      });
+    });
+    return merged;
+  }
+
+  // 该护栏条目下所有清单的关键词并集（小写，便于大小写不敏感比较）。
+  function stKeywordEntryAllowedSet(entry) {
+    const allowed = new Set();
+    const lists = stKeywordEntryLists(entry);
+    Object.keys(lists).forEach(listId => {
+      const keywords = lists[listId] && Array.isArray(lists[listId].keywords) ? lists[listId].keywords : [];
+      keywords.forEach(keyword => {
+        const normalized = stKeywordNormalize(keyword).toLowerCase();
+        if (normalized) allowed.add(normalized);
+      });
+    });
+    return allowed;
+  }
+
+  // 只替换目标条目下的指定清单，其他 App/批次/清单保持不变。
+  function upsertStKeywordList(app, batch, country, listId, keywords) {
+    const key = stKeywordScopeKey(app, batch, country);
+    const normalized = stKeywordNormalizeList(keywords);
+    const id = String(listId || '').trim() || 'default';
+    const store = getStKeywordWhitelist();
+    const entry = store[key] && typeof store[key] === 'object' ? store[key] : {};
+    const lists = { ...stKeywordEntryLists(entry) };
+    const now = new Date().toISOString();
+    lists[id] = { keywords: normalized, updatedAt: now };
+    store[key] = { lists, updatedAt: now };
+    saveStKeywordWhitelist(store);
+    return { key, listId: id, count: normalized.length };
+  }
+
+  function getStRejectedKeywords() {
+    const parsed = safeJsonParse(localStorage.getItem(ST_REJECTED_KEYWORDS_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
+  function pushStRejectedKeywords(records) {
+    const incoming = Array.isArray(records) ? records : [];
+    if (!incoming.length) return;
+    // 同一批次的 at 相同，按接收顺序倒序前置，保证“最新在前”且超出上限时丢弃最旧的记录。
+    const next = [...incoming.slice().reverse(), ...getStRejectedKeywords()].slice(0, ST_REJECTED_KEYWORDS_MAX);
+    localStorage.setItem(ST_REJECTED_KEYWORDS_KEY, JSON.stringify(next));
+  }
+
+  // 仅 keywordSource==='task'（任务自身绑定清单）时登记，'page' 回退来源不可信。
+  function registerStKeywordListsFromPayload(payload = {}, rows) {
+    if (payload.keywordSource !== 'task') return 0;
+    const keywords = stKeywordNormalizeList(payload.keywords);
+    if (!keywords.length) return 0;
+    const incoming = Array.isArray(rows) ? rows : [];
+    if (!incoming.length) return 0;
+    const scopes = new Map();
+    incoming.forEach(item => {
+      const scope = stKeywordRowScope(item);
+      scopes.set(stKeywordScopeKey(scope.app, scope.batch, scope.country), scope);
+    });
+    const listId = String(payload.keywordListId || '').trim() || 'default';
+    scopes.forEach(scope => upsertStKeywordList(scope.app, scope.batch, scope.country, listId, keywords));
+    return scopes.size;
+  }
+
+  // 返回 { rows, rejected }。调用方必须在异常时回退为“全部保留”。
+  function filterStRowsByKeywordWhitelist(rows) {
+    const incoming = Array.isArray(rows) ? rows : [];
+    const store = getStKeywordWhitelist();
+    const allowedCache = new Map();
+    const kept = [];
+    const rejected = [];
+    const at = new Date().toISOString();
+    incoming.forEach(item => {
+      const scope = stKeywordRowScope(item);
+      const cacheKey = stKeywordScopeKey(scope.app, scope.batch, scope.country);
+      if (!allowedCache.has(cacheKey)) {
+        const entry = findStKeywordEntry(store, scope.app, scope.batch, scope.country);
+        const allowed = entry ? stKeywordEntryAllowedSet(entry) : null;
+        // 空清单不视为有效护栏，避免损坏数据导致整批行被丢弃。
+        allowedCache.set(cacheKey, allowed && allowed.size ? allowed : null);
+      }
+      const allowed = allowedCache.get(cacheKey);
+      if (!allowed) { kept.push(item); return; }
+      const keyword = stKeywordNormalize(item.Keyword || item.keyword);
+      if (allowed.has(keyword.toLowerCase())) { kept.push(item); return; }
+      rejected.push({
+        at,
+        app: scope.app,
+        batch: scope.batch,
+        country: scope.country,
+        keyword,
+        rank: String(item.Rank || item.rank || '').trim(),
+        date: toDateKey(resolveStDataDate(item)),
+        reason: 'not_in_whitelist'
+      });
+    });
+    return { rows: kept, rejected };
   }
 
   function encode(value) {
@@ -3010,6 +3180,57 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       ['同步日志', `${logs.length.toLocaleString()} 条`, SYNC_LOG_KEY]
     ];
     document.getElementById('storageSummary').innerHTML = rows.map(([name,note,key]) => `<div class="storage-row"><div class="storage-key">${name}</div><div class="storage-note">${note}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('');
+    renderStKeywordGuardPanel();
+  }
+
+  // ---------------- ST 关键词清单护栏面板（v2.3.23） ----------------
+  function renderStKeywordGuardPanel() {
+    const box = document.getElementById('stKeywordGuardPanel');
+    if (!box) return;
+    let status;
+    try {
+      status = window.ASO_ST_KEYWORD_STATUS();
+    } catch (error) {
+      box.innerHTML = `<div class="hint">读取关键词清单状态失败：${escapeHtml(error.message || String(error))}</div>`;
+      return;
+    }
+    const header = `<div class="summary-line"><span class="version-badge">已登记清单 ${status.lists.length} 个</span><span class="version-badge">覆盖组合 ${status.whitelistKeys} 个</span><span class="version-badge">累计拒绝 ${status.rejected} 条</span></div>`;
+    const listHtml = status.lists.length
+      ? status.lists.map(item => {
+          const preview = item.keywords.slice(0, 8).map(escapeHtml).join('、') + (item.keywords.length > 8 ? ' …' : '');
+          return `<div class="storage-row"><div class="storage-key">${escapeHtml(item.key)}</div><div class="storage-note">清单 ${escapeHtml(item.listId)}｜${item.keywords.length} 个关键词｜${preview}</div><span class="version-badge">${escapeHtml(item.updatedAt || '')}</span></div>`;
+        }).join('')
+      : '<div class="hint">尚未登记任何关键词清单。插件以 keywordSource=task 同步后会自动登记。</div>';
+    const rejectedHtml = status.rejectedLatest.length
+      ? `<div class="table-wrap"><table class="overview-status-table"><thead><tr><th>App</th><th>批次</th><th>国家</th><th>关键词</th><th>数据日期</th><th>拒绝时间</th></tr></thead><tbody>${status.rejectedLatest.map(item => `<tr><td>${escapeHtml(item.app)}</td><td>${escapeHtml(item.batch)}</td><td>${escapeHtml(item.country || '—')}</td><td>${escapeHtml(item.keyword)}</td><td>${escapeHtml(item.date || '—')}</td><td>${escapeHtml(item.at || '')}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="hint">暂无被拒绝的关键词记录。</div>';
+    box.innerHTML = `${header}<div class="selector-title">已登记清单</div>${listHtml}<div class="selector-title">最近拒绝记录（最多 20 条）</div>${rejectedHtml}`;
+  }
+
+  function stKeywordPruneDetailText(detail) {
+    return (Array.isArray(detail) ? detail : [])
+      .map(item => `· ${item.keyword}（${item.app}｜${item.batch}｜${item.country || '无国家'}）× ${item.count}`)
+      .join('\n');
+  }
+
+  function runStKeywordPruneTool() {
+    const output = document.getElementById('stKeywordGuardOutput');
+    const write = text => { if (output) output.textContent = text; };
+    try {
+      const preview = window.ASO_PRUNE_ST_OUT_OF_LIST({ dryRun:true });
+      const breakdown = stKeywordPruneDetailText(preview.detail);
+      write(`预检（未修改数据）：扫描 ${preview.scanned} 条，发现清单外记录 ${preview.removed} 条。\n${breakdown || '（无）'}`);
+      if (!preview.removed) { alert('没有发现清单外的关键词记录。'); return; }
+      if (!confirm(`确定清理 ${preview.removed} 条不在已登记清单内的记录吗？\n\n${breakdown}\n\n记录会移入 ST 回收站，可随时恢复。`)) return;
+      const result = window.ASO_PRUNE_ST_OUT_OF_LIST({ dryRun:false });
+      addSyncLog({ source:'sensortower', status:'warning', message:`关键词清单护栏清理：移除 ${result.removed} 条清单外记录。` });
+      renderStKeywordGuardPanel();
+      renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+      write(`已清理 ${result.removed} 条清单外记录（扫描 ${result.scanned} 条），可在“回收站”恢复。\n${breakdown || '（无）'}`);
+    } catch (error) {
+      write(`清理失败：${error.message || String(error)}`);
+      alert(`清理失败：${error.message || String(error)}`);
+    }
   }
 
 
@@ -3657,6 +3878,12 @@ function initDiandianEvents() {
     document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
     document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
     document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
+    document.getElementById('stKeywordStatusBtn')?.addEventListener('click', () => {
+      renderStKeywordGuardPanel();
+      const output = document.getElementById('stKeywordGuardOutput');
+      if (output) output.textContent = '已刷新关键词清单状态。';
+    });
+    document.getElementById('stKeywordPruneBtn')?.addEventListener('click', runStKeywordPruneTool);
     document.getElementById('clearStBtn')?.addEventListener('click', () => {
       if(!confirm('确定清空全部 Sensor Tower 数据吗？数据将进入回收站。')) return;
       moveStorageKeyToTrash('st_storage', MASTER_KEY, 'Sensor Tower 数据');
@@ -3683,13 +3910,31 @@ function initDiandianEvents() {
     try {
       const isSt = source === 'sensortower' || source === 'st' || source === 'sensortower_status' || Boolean(payload.stStatus || payload.statusRecord || payload.statusRecords || payload.data);
       if (isSt && !['qimai_ios','qimai','diandian_ios','diandian'].includes(source)) {
-        const incomingData = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.records) ? payload.records : []);
+        const rawIncomingData = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.records) ? payload.records : []);
+        // 关键词清单护栏：任何异常都必须回退为原有行为（整批保留），不能影响保存。
+        let incomingData = rawIncomingData;
+        let rejectedRows = [];
+        try {
+          registerStKeywordListsFromPayload(payload, rawIncomingData);
+          const guarded = filterStRowsByKeywordWhitelist(rawIncomingData);
+          incomingData = guarded.rows;
+          rejectedRows = guarded.rejected;
+          pushStRejectedKeywords(rejectedRows);
+        } catch (error) {
+          console.warn('ST 关键词清单护栏执行失败，已按原有行为接收全部行：', error);
+          incomingData = rawIncomingData;
+          rejectedRows = [];
+        }
+        const rejectedCount = rejectedRows.length;
         const inferredStatusCount = incomingData.length ? mergeIncomingData(incomingData) : 0;
         const statusCount = mergeStStatusPayload(payload) + inferredStatusCount;
-        if (!incomingData.length && !statusCount) return { ok:false, code:'invalid_st_payload', message:'ST 同步数据为空。', dashboardVersion:DASHBOARD_VERSION };
-        addSyncLog({ source:'sensortower', status:'success', message:`插件自动同步 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。` });
+        if (!rawIncomingData.length && !statusCount) return { ok:false, code:'invalid_st_payload', message:'ST 同步数据为空。', dashboardVersion:DASHBOARD_VERSION };
+        const savedMessage = rejectedCount
+          ? `已保存 ST 排名 ${incomingData.length} 条，拒绝 ${rejectedCount} 条不在已登记关键词清单内的记录，日期状态 ${statusCount} 条。`
+          : `已保存 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。`;
+        addSyncLog({ source:'sensortower', status: rejectedCount ? 'warning' : 'success', message: savedMessage });
         renderDashboard(); renderOverview(); renderStorageSummary();
-        return { ok:true, code:'saved', message:`已保存 ST 排名 ${incomingData.length} 条，日期状态 ${statusCount} 条。`, count:incomingData.length, statusCount, dashboardVersion:DASHBOARD_VERSION, receivedAt:new Date().toISOString() };
+        return { ok:true, code:'saved', message:savedMessage, count:incomingData.length, statusCount, rejectedCount, dashboardVersion:DASHBOARD_VERSION, receivedAt:new Date().toISOString() };
       }
       const isDiandian = source === 'diandian_ios' || source === 'diandian' || Boolean(payload.diandianState);
       if (payload.verifySnapshot) {
@@ -3798,6 +4043,105 @@ function initDiandianEvents() {
       backupKey,
       message:`已合并 ${changed} 条记录到 ${to}`
     };
+  };
+
+
+  // ---------------- ST 关键词清单护栏工具（v2.3.23） ----------------
+  // 查询当前已登记的清单与被拒绝的关键词。
+  window.ASO_ST_KEYWORD_STATUS = function() {
+    const store = getStKeywordWhitelist();
+    const lists = [];
+    Object.keys(store).forEach(key => {
+      const entry = store[key] && typeof store[key] === 'object' ? store[key] : {};
+      const entryLists = stKeywordEntryLists(entry);
+      Object.keys(entryLists).forEach(listId => {
+        const list = entryLists[listId] && typeof entryLists[listId] === 'object' ? entryLists[listId] : {};
+        lists.push({
+          key,
+          listId,
+          keywords: Array.isArray(list.keywords) ? list.keywords : [],
+          updatedAt: list.updatedAt || entry.updatedAt || ''
+        });
+      });
+    });
+    lists.sort((a, b) => `${a.key}|${a.listId}`.localeCompare(`${b.key}|${b.listId}`));
+    const rejected = getStRejectedKeywords();
+    return {
+      ok:true,
+      lists,
+      rejected: rejected.length,
+      rejectedLatest: rejected.slice(0, 20),
+      whitelistKeys: Object.keys(store).length
+    };
+  };
+
+  // 手动登记/覆盖一个 App + 批次 + 国家 的关键词清单（REPLACE 同 listId 条目）。
+  window.ASO_SET_ST_KEYWORD_WHITELIST = function(options = {}) {
+    const app = String(options.app || '').trim();
+    const batch = String(options.batch || '').trim();
+    const country = String(options.country || '').trim().toUpperCase();
+    const key = stKeywordScopeKey(app, batch, country);
+    const keywords = stKeywordNormalizeList(options.keywords);
+    if (!app || !batch) return { ok:false, key, count:0, message:'需要 app 与 batch 参数。' };
+    if (!keywords.length) return { ok:false, key, count:0, message:'keywords 不能为空。' };
+    const saved = upsertStKeywordList(app, batch, country, options.listId, keywords);
+    return { ok:true, key:saved.key, listId:saved.listId, count:saved.count, message:`已登记 ${saved.count} 个关键词：${saved.key} / ${saved.listId}` };
+  };
+
+  // 清理主表中已登记护栏、但关键词不在清单内的历史记录（先 dryRun 预检）。
+  window.ASO_PRUNE_ST_OUT_OF_LIST = function(options = {}) {
+    const filterApp = String(options.app || '').trim();
+    const filterBatch = String(options.batch || '').trim();
+    const filterCountry = String(options.country || '').trim().toUpperCase();
+    const dryRun = options.dryRun === true;
+    const store = getStKeywordWhitelist();
+    const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const kept = [];
+    const removedRecords = [];
+    const detailMap = new Map();
+    let scanned = 0;
+
+    records.forEach(item => {
+      const app = String(item.App || '').trim();
+      const batch = String(item.Batch || item.batchName || '').trim();
+      const country = String(item.Country || '').trim().toUpperCase();
+      if ((filterApp && app !== filterApp) || (filterBatch && batch !== filterBatch) || (filterCountry && country !== filterCountry)) {
+        kept.push(item);
+        return;
+      }
+      scanned += 1;
+      const entry = findStKeywordEntry(store, app, batch, country);
+      const allowed = entry ? stKeywordEntryAllowedSet(entry) : null;
+      if (!allowed || !allowed.size) { kept.push(item); return; }
+      const keyword = stKeywordNormalize(item.Keyword);
+      if (allowed.has(keyword.toLowerCase())) { kept.push(item); return; }
+      removedRecords.push(item);
+      const detailKey = [app, batch, country, keyword].join('|');
+      const detail = detailMap.get(detailKey) || { app, batch, country, keyword, count:0 };
+      detail.count += 1;
+      detailMap.set(detailKey, detail);
+    });
+
+    const detail = [...detailMap.values()].sort((a, b) =>
+      b.count - a.count ||
+      `${a.app}${a.batch}${a.country}${a.keyword}`.localeCompare(`${b.app}${b.batch}${b.country}${b.keyword}`)
+    );
+
+    if (!dryRun && removedRecords.length) {
+      const parsedTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
+      const stTrash = Array.isArray(parsedTrash) ? parsedTrash : [];
+      stTrash.push({
+        type:'st_keyword_guard',
+        app: filterApp || (detail.length === 1 ? detail[0].app : '关键词清单护栏'),
+        label:'ST 关键词清单护栏清理',
+        records: removedRecords,
+        deletedAt: Date.now()
+      });
+      localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
+      saveMasterData(kept);
+    }
+
+    return { ok:true, removed: removedRecords.length, scanned, dryRun, detail };
   };
 
   function initStFilterEvents() {
