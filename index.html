@@ -73,6 +73,9 @@
             <button id="excelCurrentBtn" class="excel-btn">导出当前筛选 Excel</button>
             <button id="excelAllBtn" class="excel-btn">导出全部 ST Excel</button>
             <button id="deleteAppBtn" class="clear-btn">删除当前 App 数据</button>
+            <button id="stClearSelectionBtn" class="action-btn">清除勾选</button>
+            <button id="stDeleteSelectedBtn" class="action-btn danger">删除选中关键词</button>
+            <span class="hint" id="stSelectionNote">已勾选 0 个关键词</span>
           </div>
           <div class="selector-title">App 筛选</div>
           <div class="filter-row">
@@ -85,10 +88,10 @@
           <div class="hint">折线图保留全部日数据点并连接缺失点；横轴日期会按跨度与窗口宽度自动稀疏显示，首尾日期及重要节点优先保留。鼠标悬停仍可查看每一天的准确排名。备注可自行选择任意日期添加。主表显示首刷排名、最新排名与历史最高排名，完整日期仍保留在历史管理中。ST 仍使用原存储键 aso_master_data。</div>
         </div>
         <div id="chartContainer" style="width:100%;height:400px;"></div>
-        <div id="emptyState">暂无 ST 数据。请先通过插件抓取，或导入 JSON 备份。</div>
+        <div id="emptyState">暂无 ST 数据。请先通过插件抓取。</div>
         <div class="table-wrap">
           <table id="dataTable">
-            <thead><tr><th>勾选</th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名</th><th>最新排名</th><th>历史最高排名</th><th>Rank Change</th><th>备注 / 历史管理</th><th>操作</th></tr></thead>
+            <thead><tr><th><input id="stSelectAllVisible" type="checkbox" aria-label="全选当前筛选"></th><th>App</th><th>测试批次</th><th>Keyword</th><th>首刷排名</th><th>最新排名</th><th>历史最高排名</th><th>Rank Change</th><th>备注 / 历史管理</th><th>操作</th></tr></thead>
             <tbody id="tableBody"></tbody>
           </table>
         </div>
@@ -197,34 +200,30 @@
       </section>
 
       <section id="dataSection" class="page-section">
-        <div class="page-heading"><div><h2>数据管理</h2><p>ST、七麦与点点分开存储、统一备份。清理操作也按来源分开，降低误删风险。</p></div></div>
-        <div class="two-col">
-          <div class="panel">
-            <div class="panel-title"><h3>导入与导出</h3></div>
-            <div class="data-actions">
-              <button id="exportUnifiedBtn" class="action-btn primary">导出全部 JSON</button>
-              <button id="exportIosExcelBtn" class="action-btn success">导出 iOS Excel</button>
-              <button id="importUnifiedBtn" class="action-btn">导入统一备份</button>
-              <button id="importQimaiBtn" class="action-btn">导入七麦 14 天历史</button>
-              <input id="importUnifiedFile" type="file" accept="application/json,.json" hidden>
-              <input id="importQimaiFile" type="file" accept="application/json,.json" hidden>
-            </div>
-            <div class="hint">支持导入联合看板备份，也支持插件导出的“七麦_14天历史_YYYY-MM-DD.json”。导入采用合并，不会先清空。</div>
-          </div>
-          <div class="panel">
-            <div class="panel-title"><h3>本地数据量</h3></div>
-            <div id="storageSummary"></div>
-          </div>
+        <div class="page-heading"><div><h2>数据管理</h2><p>ST、七麦与点点分开存储；删除操作按来源分开并先进入回收站，降低误删风险。</p></div></div>
+        <div class="panel">
+          <div class="panel-title"><h3>本地数据量</h3></div>
+          <div id="storageSummary"></div>
         </div>
         <div class="panel" style="margin-top:16px;">
-          <div class="panel-title"><h3>回收站</h3></div><div id="trashPanel"></div><div class="panel-title"><h3>分来源清理</h3></div>
+          <div class="panel-title"><h3>回收站</h3><span class="version-badge">保留 30 天 / 最多 50 条</span></div>
+          <div class="data-actions">
+            <button id="trashRefreshBtn" class="action-btn">刷新回收站</button>
+            <button id="trashRestoreAllBtn" class="action-btn success">恢复全部</button>
+            <button id="trashClearAllBtn" class="action-btn danger">清空回收站</button>
+          </div>
+          <div class="hint">删除的数据会先移入回收站，保留 30 天、最多 50 条；恢复或永久删除都会同时同步两个回收站存储。清空回收站不可恢复。</div>
+          <div id="trashPanel"></div>
+        </div>
+        <div class="panel" style="margin-top:16px;">
+          <div class="panel-title"><h3>分来源清理</h3></div>
           <div class="data-actions">
             <button id="clearIosBtn" class="action-btn danger">清空 iOS 七麦数据</button>
             <button id="clearStBtn" class="action-btn danger">清空 Sensor Tower 数据</button>
             <button id="clearDiandianBtn" class="action-btn danger">清空 iOS 点点数据</button>
             <button id="clearSyncLogsBtn" class="action-btn danger">清空同步日志</button>
           </div>
-          <div class="hint">ST 数据支持移入回收站。清理前建议先导出全部 JSON。</div>
+          <div class="hint">清理会先把数据移入回收站，可在上方回收站里恢复。</div>
         </div>
         <div class="panel" style="margin-top:16px;">
           <div class="panel-title"><h3>关键词清单护栏（Sensor Tower）</h3></div>

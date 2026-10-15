@@ -15,7 +15,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.3.23';
+  const DASHBOARD_VERSION = '2.3.24';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
   // 关键词清单护栏（v2.3.23）：只接收任务自身关键词清单内的 ST 行。
   const ST_KEYWORD_WHITELIST_KEY = 'aso_st_keyword_whitelist_v1';
@@ -250,20 +250,75 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
   }
 
 
+  // ---------------- 回收站（v2.3.24） ----------------
+  // 两个回收站存储必须始终成对维护：
+  //   1) aso_deleted_tracking_trash_v1（TRASH_KEY）：主回收站，所有来源都会写入；
+  //   2) aso_st_trash_v1：ST 专用镜像，兼容旧版本删除链路。
+  // 同一个条目（deletedAt + key/app 相同）可能同时存在于两边，恢复/永久删除必须一起处理，
+  // 否则会出现“删掉又从另一个存储里冒回来”的幽灵条目。
+  const ST_TRASH_KEY = 'aso_st_trash_v1';
+  const TRASH_MAX_AGE_DAYS = 30;
+  const TRASH_MAX_COUNT = 50;
+
+  function getStTrashRecords() {
+    const parsed = safeJsonParse(localStorage.getItem(ST_TRASH_KEY) || '[]', []);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+  function saveStTrashRecords(list) {
+    localStorage.setItem(ST_TRASH_KEY, JSON.stringify(Array.isArray(list) ? list : []));
+  }
   function getTrashRecords() {
     const mainTrash = safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
-    // 合并 ST 专用回收记录，兼容旧版本删除链路
-    const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', [])
-      .map(item => ({ ...item, _trashSource: 'st' }));
+    // 合并 ST 专用回收记录，兼容旧版本删除链路；_trashSource 仅用于展示来源。
+    const stTrash = getStTrashRecords().map(item => ({ ...item, _trashSource: 'st' }));
     return [...mainTrash, ...stTrash];
   }
   function saveTrashRecords(list) {
     localStorage.setItem(TRASH_KEY, JSON.stringify(list || []));
   }
+  let trashEntrySeq = 0;
+  function nextTrashId() {
+    trashEntrySeq += 1;
+    return `${Date.now()}-${trashEntrySeq}`;
+  }
+  function trashTwinMatches(a, b) {
+    if (!a || !b) return false;
+    if (a._trashId && b._trashId) return String(a._trashId) === String(b._trashId);
+    if (Number(a.deletedAt || 0) !== Number(b.deletedAt || 0)) return false;
+    if (a.key && b.key) return a.key === b.key;
+    return Boolean(a.app && b.app && a.app === b.app && String(a.type || '') === String(b.type || ''));
+  }
+  // 把同一条目从主回收站与 ST 镜像里一起移除，避免恢复/永久删除后重复出现。
+  function removeTrashEntryBoth(index) {
+    const mainTrash = safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
+    const stTrash = getStTrashRecords();
+    const fromMain = index < mainTrash.length;
+    const entry = fromMain ? mainTrash[index] : stTrash[index - mainTrash.length];
+    if (!entry) return null;
+
+    if (fromMain) {
+      mainTrash.splice(index, 1);
+      saveTrashRecords(mainTrash);
+      const twin = stTrash.findIndex(item => trashTwinMatches(entry, item));
+      if (twin >= 0) {
+        stTrash.splice(twin, 1);
+        saveStTrashRecords(stTrash);
+      }
+    } else {
+      stTrash.splice(index - mainTrash.length, 1);
+      saveStTrashRecords(stTrash);
+      const twin = mainTrash.findIndex(item => trashTwinMatches(entry, item));
+      if (twin >= 0) {
+        mainTrash.splice(twin, 1);
+        saveTrashRecords(mainTrash);
+      }
+    }
+    return entry;
+  }
   function cleanupTrash() {
     const now = Date.now();
-    const MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-    const MAX_COUNT = 50;
+    const MAX_AGE = TRASH_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const MAX_COUNT = TRASH_MAX_COUNT;
 
     const clean = (list) => {
       return (Array.isArray(list) ? list : [])
@@ -278,135 +333,283 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     ));
 
     // ST 专用回收站
-    localStorage.setItem(
-      'aso_st_trash_v1',
-      JSON.stringify(
-        clean(safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []))
-      )
-    );
+    saveStTrashRecords(clean(getStTrashRecords()));
   }
+  function trashRecordCount(entry) {
+    const records = Array.isArray(entry?.records) ? entry.records.length : 0;
+    const statuses = Array.isArray(entry?.stStatuses) ? entry.stStatuses.length : 0;
+    return records + statuses;
+  }
+  function trashTypeLabel(type) {
+    const map = {
+      st_app:'ST·整个 App',
+      st_keyword:'ST·关键词',
+      st_keywords:'ST·关键词',
+      st_date:'ST·单日记录',
+      st_dates:'ST·单日记录',
+      st_keyword_guard:'ST·清单护栏清理',
+      qimai_task:'七麦快照',
+      diandian_task:'点点快照',
+      storage_key:'存储项'
+    };
+    const key = String(type || '');
+    if (map[key]) return map[key];
+    if (key.indexOf('storage_key') === 0) return '存储项';
+    return '未知';
+  }
+  function trashEntryScopeText(entry) {
+    return [entry?.app, entry?.batch, entry?.keyword].filter(Boolean).join('｜');
+  }
+  function trashEntrySummary(entry) {
+    const count = trashRecordCount(entry);
+    const scope = trashEntryScopeText(entry);
+    return `${trashTypeLabel(entry?.type)}${scope ? '｜' + scope : ''}｜${count} 条记录`;
+  }
+  // ---------------- 删除当前 App 数据（v2.3.24 唯一实现） ----------------
+  // 之前下拉框筛成“全部 App”时会取到空值导致静默什么都不做，这里改为三级兜底解析。
+  function resolveDeleteTargetApp() {
+    const select = document.getElementById('appSelect');
+    const raw = select && typeof select.value === 'string' ? select.value : '';
+    if (raw && raw !== 'all' && raw !== '全部' && raw !== 'all-apps') {
+      const decoded = decode(raw);
+      if (decoded && decoded !== 'all' && decoded !== '全部') return decoded;
+    }
+    if (Array.isArray(selectedApps) && selectedApps.length === 1 && selectedApps[0]) return selectedApps[0];
+    const apps = [...new Set(getCurrentStFilteredRows().map(item => item.App).filter(Boolean))];
+    return apps.length === 1 ? apps[0] : '';
+  }
+
+  function deleteSelectedAppData(appOverride) {
+    try {
+      const app = appOverride ? String(appOverride).trim() : resolveDeleteTargetApp();
+      if (!app) {
+        alert('当前没有选定具体 App，请先在上方「App 名称」里选择要删除的 App。');
+        return;
+      }
+
+      const all = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+      const removed = all.filter(item => item.App === app);
+      const statuses = getStProcessingStatuses();
+      const removedStatuses = statuses.filter(item => (item.App || item.app) === app);
+      const remainStatuses = statuses.filter(item => (item.App || item.app) !== app);
+
+      if (!removed.length && !removedStatuses.length) {
+        alert(`未找到 ${app} 的数据。`);
+        return;
+      }
+
+      if (!confirm(`确定删除【${app}】的全部数据吗？\n\n排名记录：${removed.length} 条\n日期状态：${removedStatuses.length} 条\n\n数据会移入回收站（保留 30 天，最多 50 条），可在「数据管理 - 回收站」恢复。`)) return;
+
+      // 一次性写入两个回收站存储，deletedAt 与 _trashId 保持一致，避免孪生条目对不上。
+      const entry = {
+        type:'st_app',
+        app,
+        records: removed,
+        stStatuses: removedStatuses
+      };
+      const saved = moveToTrashRecord(entry);
+      mirrorStTrashEntry(saved);
+
+      saveMasterData(all.filter(item => item.App !== app));
+      saveStProcessingStatuses(remainStatuses);
+
+      // 清掉残留筛选，让被删掉的 App 从下拉框里消失
+      selectedApps = [];
+      selectedItems = [];
+      saveSelectedItemsState();
+      persistStFilterState();
+      const appSelect = document.getElementById('appSelect');
+      if (appSelect) appSelect.value = '';
+
+      renderDashboard();
+      const selectAfterRender = document.getElementById('appSelect');
+      if (selectAfterRender) selectAfterRender.value = '';
+      cleanupOrphanStStatuses();
+      renderOverview();
+      renderStorageSummary();
+      renderTrashPanel();
+      alert(`已移入回收站：${app}（${removed.length} 条记录）`);
+    } catch (error) {
+      alert('删除失败：' + (error && error.message ? error.message : String(error)));
+    }
+  }
+
   function deleteAppTracking(app) {
-    if (!app) return;
+    // v2.3.24 起统一委托给“删除当前 App 数据”的可靠实现，避免两套逻辑分叉。
+    return deleteSelectedAppData(app);
+  }
+  function restoreTrashEntry(entry) {
+    if (!entry) return false;
+    try {
+      if (entry.type === 'storage_key') {
+        if (!entry.key) throw new Error('缺少存储键');
+        localStorage.setItem(entry.key, entry.rawData || '[]');
+      } else if (entry.type === 'qimai_task') {
+        saveQimaiSnapshots([
+          ...getQimaiSnapshots(),
+          ...(entry.records || [])
+        ]);
+      } else if (entry.type === 'diandian_task') {
+        saveDiandianSnapshots([
+          ...getDiandianSnapshots(),
+          ...(entry.records || [])
+        ]);
+      } else {
+        // st_app / st_keyword / st_keywords / st_date / st_dates / st_keyword_guard 等都回到 ST 主表。
+        // v2.3.24：按 recordKey 去重，避免恢复的数据与后来重新同步的数据重复。
+        const current = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+        const incoming = normalizeRecords(entry.records || []);
+        const map = new Map(current.map(item => [recordKey(item), item]));
+        incoming.forEach(item => map.set(recordKey(item), item));
+        saveMasterData([...map.values()]);
+      }
 
-    const all = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
-
-    const removed = all.filter(
-      r => r.App === app || r.app === app
-    );
-
-    if (!removed.length) return alert('未找到该 App 数据');
-
-    if (!confirm(`确定移除 ${app} 的全部追踪数据？\n数据会进入回收站，21天后自动清理。`)) return;
-
-
-    // 保存 ST 状态到回收站
-    const stStatuses = getStProcessingStatuses();
-
-    const removedStatuses = stStatuses.filter(
-      item => item.App === app || item.app === app
-    );
-
-    const remainStatuses = stStatuses.filter(
-      item => item.App !== app && item.app !== app
-    );
-
-    saveStProcessingStatuses(remainStatuses);
-
-
-    // 删除主数据
-    const remain = all.filter(
-      r => r.App !== app && r.app !== app
-    );
-
-    saveMasterData(remain);
-
-
-    // 保存完整回收站数据
-    const trash = getTrashRecords();
-
-    trash.push({
-      type:'st_app',
-      app,
-      records: removed,
-      stStatuses: removedStatuses,
-      deletedAt: Date.now()
-    });
-
-    saveTrashRecords(trash);
-
-    renderDashboard();
-    cleanupOrphanStStatuses();
-    renderOverview();
-    renderStorageSummary();
-    alert('已移入回收站');
+      // 恢复 ST 状态
+      if (Array.isArray(entry.stStatuses) && entry.stStatuses.length) {
+        saveStProcessingStatuses([
+          ...getStProcessingStatuses(),
+          ...entry.stStatuses
+        ]);
+      }
+      return true;
+    } catch (error) {
+      console.warn('恢复回收站条目失败：', error);
+      return false;
+    }
   }
   function restoreTrash(index) {
     const trash = getTrashRecords();
     const item = trash[index];
     if (!item) return;
+    if (!confirm(`确定恢复这条回收站记录吗？\n\n${trashEntrySummary(item)}\n\n恢复后会回到对应数据来源。`)) return;
+    if (!restoreTrashEntry(item)) { alert('恢复失败，请刷新后重试。'); return; }
+    removeTrashEntryBoth(index);
+    refreshAfterTrashChange();
+  }
+  function permanentlyDeleteTrash(index) {
+    const trash = getTrashRecords();
+    const item = trash[index];
+    if (!item) return;
+    if (!confirm(`确定永久删除这条回收站记录吗？\n\n${trashEntrySummary(item)}\n\n永久删除后无法恢复。`)) return;
+    removeTrashEntryBoth(index);
+    refreshAfterTrashChange();
+  }
+  function restoreAllTrash() {
+    // 按删除时间从新到旧依次恢复（新条目先处理），单个条目失败不影响其它条目。
+    const trash = getTrashRecords()
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => Number(b.entry.deletedAt || 0) - Number(a.entry.deletedAt || 0));
+    if (!trash.length) { alert('回收站为空，无需恢复。'); return; }
+    if (!confirm(`确定恢复回收站里的全部 ${trash.length} 条记录吗？\n\n恢复后会回到对应数据来源。`)) return;
 
-    const current = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
-
-    if (item.type === 'storage_key') {
-      if (item.key) {
-        localStorage.setItem(item.key, item.rawData || '[]');
-      }
-    } else if (item.type === 'qimai_task') {
-      saveQimaiSnapshots([
-        ...getQimaiSnapshots(),
-        ...(item.records || [])
-      ]);
-    } else if (item.type === 'diandian_task') {
-      saveDiandianSnapshots([
-        ...getDiandianSnapshots(),
-        ...(item.records || [])
-      ]);
-    } else {
-      saveMasterData([
-        ...current,
-        ...(item.records || [])
-      ]);
-    }
-
-
-    // 恢复 ST 状态
-    if (Array.isArray(item.stStatuses) && item.stStatuses.length) {
-      const currentStatuses = getStProcessingStatuses();
-
-      saveStProcessingStatuses([
-        ...currentStatuses,
-        ...item.stStatuses
-      ]);
-    }
-
-
-    const removedItem = trash.splice(index,1)[0];
-
-    if (removedItem && removedItem._trashSource === 'st') {
-      const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
-      const pos = stTrash.findIndex(x =>
-        x.deletedAt === removedItem.deletedAt &&
-        (x.key === removedItem.key || x.app === removedItem.app)
+    let restored = 0;
+    let failed = 0;
+    trash.forEach(({ entry }) => {
+      // 每次都用最新的合并视图重新定位，避免前面的删除让下标错位。
+      const index = getTrashRecords().findIndex(candidate =>
+        (candidate._trashId && entry._trashId)
+          ? String(candidate._trashId) === String(entry._trashId)
+          : trashTwinMatches(candidate, entry)
       );
-      if (pos >= 0) {
-        stTrash.splice(pos, 1);
-        localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
-      }
-    } else {
-      saveTrashRecords(trash);
-    }
-
+      if (index < 0) return;
+      if (restoreTrashEntry(entry) && removeTrashEntryBoth(index)) restored += 1;
+      else failed += 1;
+    });
+    refreshAfterTrashChange();
+    alert(`恢复完成：成功 ${restored} 条${failed ? `，失败 ${failed} 条（可刷新后重试）` : ''}。`);
+  }
+  function clearTrashAll() {
+    const trash = getTrashRecords();
+    if (!trash.length) { alert('回收站已经是空的。'); return; }
+    if (!confirm(`确定清空回收站吗？共 ${trash.length} 条记录。\n\n清空后无法恢复。`)) return;
+    const typed = prompt('清空回收站不可恢复。请输入“清空回收站”以确认：');
+    if (String(typed || '').trim() !== '清空回收站') { alert('已取消清空回收站。'); return; }
+    saveTrashRecords([]);
+    saveStTrashRecords([]);
+    refreshAfterTrashChange();
+    alert('回收站已清空。');
+  }
+  function refreshAfterTrashChange() {
     renderDashboard();
     renderOverview();
     renderStorageSummary();
     renderTrashPanel();
   }
+  function trashDetailHtml(entry) {
+    const records = Array.isArray(entry.records) ? entry.records : [];
+    const preview = records.slice(0, 20).map(item => {
+      const date = item.Date || item.date || item.dataDate || '';
+      const keyword = item.Keyword || item.keyword || '';
+      const rankRaw = item.Rank ?? item.rank ?? '';
+      const rank = rankRaw === '' || rankRaw === null || rankRaw === undefined ? '' : ` #${rankRaw}`;
+      return `${escapeHtml(String(date || '—'))}｜${escapeHtml(String(keyword || '—'))}${escapeHtml(rank)}`;
+    });
+    const keywords = Array.isArray(entry.keywords) && entry.keywords.length
+      ? `<div class="hint">关键词：${escapeHtml(entry.keywords.join('、'))}</div>`
+      : '';
+    const statuses = Array.isArray(entry.stStatuses) && entry.stStatuses.length
+      ? `<div class="hint">ST 状态记录：${entry.stStatuses.length} 条</div>`
+      : '';
+    const more = records.length > 20 ? `<div class="hint">仅展示前 20 条，共 ${records.length} 条。</div>` : '';
+    const body = preview.length
+      ? preview.map(text => `<div class="hint">${text}</div>`).join('')
+      : '<div class="hint">该条目没有可展开的明细记录。</div>';
+    return `${keywords}${statuses}${body}${more}`;
+  }
   function renderTrashPanel() {
-    const box=document.getElementById('trashPanel');
-    if(!box) return;
-    const trash=getTrashRecords();
-    box.innerHTML = trash.length ? trash.map((x,i)=>`<div class="panel"><b>${escapeHtml(x.app||'')}</b> <span>删除于 ${new Date(x.deletedAt).toLocaleDateString()}</span> <button data-trash-index="${i}" class="action-btn">恢复</button></div>`).join('') : '<div class="hint">暂无回收站数据</div>';
-    box.querySelectorAll('[data-trash-index]').forEach(btn=>btn.onclick=()=>restoreTrash(Number(btn.dataset.trashIndex)));
+    const box = document.getElementById('trashPanel');
+    if (!box) return;
+    const trash = getTrashRecords()
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => Number(b.entry.deletedAt || 0) - Number(a.entry.deletedAt || 0));
+
+    if (!trash.length) {
+      box.innerHTML = '<div class="hint">暂无回收站数据。删除的 ST 记录、七麦 / 点点快照与存储项会先进入这里。</div>';
+      return;
+    }
+
+    const totalRecords = trash.reduce((sum, item) => sum + trashRecordCount(item.entry), 0);
+    const earliest = Math.min(...trash.map(item => Number(item.entry.deletedAt || Date.now())));
+    const summary = `<div class="summary-line"><span class="version-badge">条目数 ${trash.length}</span><span class="version-badge">记录总数 ${totalRecords}</span><span class="version-badge">最早删除 ${escapeHtml(new Date(earliest).toLocaleString())}</span></div>`;
+
+    const cards = trash.map(item => {
+      const entry = item.entry;
+      const elapsedDays = Math.floor((Date.now() - Number(entry.deletedAt || Date.now())) / 86400000);
+      const remainDays = Math.max(0, TRASH_MAX_AGE_DAYS - elapsedDays);
+      const scope = trashEntryScopeText(entry);
+      const name = entry.label || (entry.type === 'storage_key' ? (entry.key || '') : scope) || entry.key || '回收记录';
+      return `<div class="panel" style="margin-top:10px;">
+        <div class="panel-title"><h3>${escapeHtml(trashTypeLabel(entry.type))}｜${escapeHtml(String(name))}</h3><span class="version-badge">剩余保留 ${remainDays} 天</span></div>
+        ${scope ? `<div class="hint">范围：${escapeHtml(scope)}</div>` : ''}
+        <div class="hint">记录数：${trashRecordCount(entry)}｜删除时间：${escapeHtml(new Date(Number(entry.deletedAt || 0)).toLocaleString())}｜剩余保留 ${remainDays} 天（共 ${TRASH_MAX_AGE_DAYS} 天，最多 ${TRASH_MAX_COUNT} 条）</div>
+        <div class="data-actions" style="margin-top:10px;">
+          <button class="action-btn success" data-trash-restore="${item.index}">恢复</button>
+          <button class="action-btn" data-trash-detail="${item.index}">详情</button>
+          <button class="action-btn danger" data-trash-delete="${item.index}">永久删除</button>
+        </div>
+        <div class="hint" id="trashDetail-${item.index}" style="display:none;">${trashDetailHtml(entry)}</div>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `${summary}${cards}`;
+    bindTrashPanelEvents();
+  }
+  // 面板每次重渲染都会重建按钮，这里统一重新绑定。
+  function bindTrashPanelEvents() {
+    const box = document.getElementById('trashPanel');
+    if (!box) return;
+    box.querySelectorAll('[data-trash-restore]').forEach(btn => {
+      btn.onclick = () => restoreTrash(Number(btn.dataset.trashRestore));
+    });
+    box.querySelectorAll('[data-trash-delete]').forEach(btn => {
+      btn.onclick = () => permanentlyDeleteTrash(Number(btn.dataset.trashDelete));
+    });
+    box.querySelectorAll('[data-trash-detail]').forEach(btn => {
+      btn.onclick = () => {
+        const target = document.getElementById(`trashDetail-${btn.dataset.trashDetail}`);
+        if (target) target.style.display = target.style.display === 'none' ? 'block' : 'none';
+      };
+    });
   }
 
   function saveMasterData(records) {
@@ -1391,24 +1594,183 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     });
 
     updateChart(filteredData.filter(item => selectedItems.includes(itemKey(item))), filteredData);
+
+    // ---------------- 勾选全选 + 批量删除（v2.3.24） ----------------
+    const visibleKeys = rows.map(itemKey);
+    renderStSelectionControls(visibleKeys);
+
+    const selectAllBox = document.getElementById('stSelectAllVisible');
+    if (selectAllBox) {
+      selectAllBox.checked = visibleKeys.length > 0 && visibleKeys.every(key => selectedItems.includes(key));
+      selectAllBox.indeterminate = !selectAllBox.checked && visibleKeys.some(key => selectedItems.includes(key));
+      selectAllBox.onchange = () => {
+        const visibleSet = new Set(visibleKeys);
+        selectedItems = selectAllBox.checked
+          ? [...new Set([...selectedItems.filter(key => !visibleSet.has(key)), ...visibleKeys])]
+          : selectedItems.filter(key => !visibleSet.has(key));
+        saveSelectedItemsState();
+        renderDashboard();
+      };
+    }
+
+    const clearSelectionBtn = document.getElementById('stClearSelectionBtn');
+    if (clearSelectionBtn) {
+      clearSelectionBtn.onclick = () => {
+        selectedItems = [];
+        saveSelectedItemsState();
+        renderDashboard();
+      };
+    }
+
+    const deleteSelectedBtn = document.getElementById('stDeleteSelectedBtn');
+    if (deleteSelectedBtn) {
+      deleteSelectedBtn.onclick = () => {
+        const currentRows = getCurrentStFilteredRows();
+        const byKey = new Map(currentRows.map(item => [stKeywordSelectionKey(item.App, item.Batch, item.Keyword), item]));
+        const entries = selectedItems
+          .filter(key => byKey.has(key))
+          .map(key => {
+            const item = byKey.get(key);
+            return { app: item.App, batch: item.Batch, keyword: item.Keyword };
+          });
+        const missing = selectedItems.filter(key => !byKey.has(key));
+        if (!entries.length) {
+          if (missing.length) {
+            if (!confirm(`已勾选 ${selectedItems.length} 个关键词，但它们都不在当前筛选范围内。\n\n是否清空勾选状态？`)) return;
+            selectedItems = [];
+            saveSelectedItemsState();
+            renderDashboard();
+            return;
+          }
+          alert('请先勾选要删除的关键词。');
+          return;
+        }
+        if (missing.length) {
+          alert(`有 ${missing.length} 个已勾选关键词不在当前筛选范围内，本次只删除列表内的 ${entries.length} 个。`);
+        }
+        deleteKeywordGroups(entries);
+      };
+    }
+  }
+
+  // ---------------- ST 勾选状态与批量删除辅助（v2.3.24） ----------------
+  function saveSelectedItemsState() {
+    try {
+      localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
+    } catch (error) {
+      console.warn('保存勾选状态失败：', error);
+    }
+  }
+
+  // 与 renderDashboard 相同的筛选顺序，供删除当前 App 时独立解析范围。
+  function getCurrentStFilteredRows() {
+    const data = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    let filtered = selectedApps.length
+      ? data.filter(item => selectedApps.includes(item.App))
+      : applyGroupFilter(data);
+    if (selectedBatches.length) filtered = filtered.filter(item => selectedBatches.includes(item.Batch));
+    return filtered;
+  }
+
+  function updateStSelectionNote() {
+    const count = Array.isArray(selectedItems) ? selectedItems.length : 0;
+    const note = document.getElementById('stSelectionNote');
+    if (note) note.textContent = `已勾选 ${count} 个关键词`;
+    const deleteBtn = document.getElementById('stDeleteSelectedBtn');
+    if (deleteBtn) deleteBtn.disabled = count === 0;
+    const clearBtn = document.getElementById('stClearSelectionBtn');
+    if (clearBtn) clearBtn.disabled = count === 0;
+  }
+
+  function renderStSelectionControls(visibleKeys) {
+    const keys = Array.isArray(visibleKeys) ? visibleKeys : [];
+    updateStSelectionNote();
+    const box = document.getElementById('stSelectAllVisible');
+    if (!box) return;
+    box.checked = keys.length > 0 && keys.every(key => selectedItems.includes(key));
+    box.indeterminate = !box.checked && keys.some(key => selectedItems.includes(key));
+  }
+
+  // ---------------- ST 主表删除（v2.3.24：全部走回收站） ----------------
+  // 删除时同时写入主回收站与 aso_st_trash_v1 镜像，保证「回收站」能原样恢复。
+  function commitStTrashRemoval(entry, keptRecords) {
+    const saved = moveToTrashRecord(entry);
+    mirrorStTrashEntry(saved);
+    saveMasterData(keptRecords);
+    return saved;
   }
 
   function deleteSingleDate(app, batch, keyword, date) {
-    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】在 ${date} 的记录吗？`)) return;
-    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
-      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword && item.Date === date));
-    saveMasterData(data);
-    renderDashboard();
+    try {
+      if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】在 ${date} 的记录吗？\n\n记录会移入回收站，可在「数据管理 - 回收站」恢复。`)) return;
+      const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+      const removed = records.filter(item => item.App === app && item.Batch === batch && item.Keyword === keyword && item.Date === date);
+      if (!removed.length) { alert('未找到该日期的记录。'); return; }
+      const kept = records.filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword && item.Date === date));
+      commitStTrashRemoval({
+        type:'st_date',
+        app,
+        batch,
+        keyword,
+        date,
+        records: removed
+      }, kept);
+      refreshAfterTrashChange();
+      alert(`已移入回收站：${app}｜${batch}｜${keyword}｜${date}（${removed.length} 条记录）`);
+    } catch (error) {
+      alert('删除失败：' + (error && error.message ? error.message : String(error)));
+    }
   }
 
   function deleteKeywordGroup(app, batch, keyword) {
-    if (!confirm(`确定删除【${app}｜${batch}｜${keyword}】的全部历史吗？`)) return;
-    const data = normalizeRecords(JSON.parse(localStorage.getItem(MASTER_KEY) || '[]'))
-      .filter(item => !(item.App === app && item.Batch === batch && item.Keyword === keyword));
-    saveMasterData(data);
-    selectedItems = selectedItems.filter(key => key !== `${app}__${batch}__${keyword}`);
-    localStorage.setItem('selected_items_v16', JSON.stringify(selectedItems));
-    renderDashboard();
+    return deleteKeywordGroups([{ app, batch, keyword }]);
+  }
+
+  function stKeywordSelectionKey(app, batch, keyword) {
+    return `${app}__${batch}__${keyword}`;
+  }
+
+  // entries = [{app, batch, keyword}]：批量把命中的主表记录整体移入回收站（一个条目）。
+  function deleteKeywordGroups(entries) {
+    try {
+      const list = (Array.isArray(entries) ? entries : [])
+        .map(item => ({
+          app: String(item && item.app || '').trim(),
+          batch: String(item && item.batch || '').trim(),
+          keyword: String(item && item.keyword || '').trim()
+        }))
+        .filter(item => item.app && item.batch && item.keyword);
+      if (!list.length) { alert('没有可删除的关键词。'); return; }
+
+      const preview = list.slice(0, 3).map(item => `${item.app}｜${item.batch}｜${item.keyword}`).join('\n');
+      if (!confirm(`确定删除选中的 ${list.length} 个关键词的全部历史吗？\n\n${preview}${list.length > 3 ? `\n…共 ${list.length} 个关键词` : ''}\n\n记录会移入回收站，可在「数据管理 - 回收站」恢复。`)) return;
+
+      const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+      const matchedSet = new Set(list.map(item => item.app + '\u0000' + item.batch + '\u0000' + item.keyword));
+      const hit = item => matchedSet.has(`${item.App}\u0000${item.Batch}\u0000${item.Keyword}`);
+      const removed = records.filter(hit);
+      if (!removed.length) { alert('未找到这些关键词的记录，可能已被删除。'); return; }
+
+      const removedKeywords = [...new Set(removed.map(item => item.Keyword))];
+      commitStTrashRemoval({
+        type: list.length > 1 ? 'st_keywords' : 'st_keyword',
+        app: list.length === 1 ? list[0].app : '',
+        batch: list.length === 1 ? list[0].batch : '',
+        keyword: list.length === 1 ? list[0].keyword : '',
+        keywords: removedKeywords,
+        entries: list,
+        records: removed
+      }, records.filter(item => !hit(item)));
+
+      const removedKeys = new Set(list.map(item => stKeywordSelectionKey(item.app, item.batch, item.keyword)));
+      selectedItems = selectedItems.filter(key => !removedKeys.has(key));
+      saveSelectedItemsState();
+
+      refreshAfterTrashChange();
+      alert(`已移入回收站：${list.length} 个关键词 / ${removed.length} 条记录`);
+    } catch (error) {
+      alert('删除失败：' + (error && error.message ? error.message : String(error)));
+    }
   }
 
   function toggleBatch(batch) {
@@ -2569,12 +2931,32 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     }
   }
 
-  function moveToTrashRecord(item){
-    const trash=getTrashRecords();
-    trash.push({...item, deletedAt: Date.now()});
-    saveTrashRecords(trash);
+  // 只写入主回收站：getTrashRecords() 是合并视图，直接回写会把 ST 镜像条目复制进主回收站。
+  function moveToTrashRecord(item, deletedAt){
+    const trash = safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
+    const list = Array.isArray(trash) ? trash : [];
+    const entry = {
+      ...item,
+      _trashId: item && item._trashId ? item._trashId : nextTrashId(),
+      deletedAt: Number(deletedAt || (item && item.deletedAt)) || Date.now()
+    };
+    list.push(entry);
+    saveTrashRecords(list);
+    return entry;
   }
 
+  // 同一条目镜像写入 ST 专用回收站，必须复用同一个 deletedAt，
+  // 否则恢复/永久删除时无法用 deletedAt + key/app 匹配到孪生条目。
+  function mirrorStTrashEntry(entry){
+    if (!entry) return;
+    try {
+      const stTrash = getStTrashRecords();
+      stTrash.push({ ...entry });
+      saveStTrashRecords(stTrash);
+    } catch(e) {
+      console.warn('ST recycle backup failed', e);
+    }
+  }
 
   function moveStorageKeyToTrash(type, key, label){
     const raw = localStorage.getItem(key);
@@ -2588,21 +2970,10 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     };
 
     // 主回收站
-    moveToTrashRecord(record);
+    const entry = moveToTrashRecord(record);
 
     // ST单独备份，避免旧版本删除链路丢失
-    if (key === MASTER_KEY) {
-      try {
-        const stTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
-        stTrash.push({
-          ...record,
-          deletedAt: Date.now()
-        });
-        localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
-      } catch(e) {
-        console.warn('ST recycle backup failed', e);
-      }
-    }
+    if (key === MASTER_KEY) mirrorStTrashEntry(entry);
 
     localStorage.removeItem(key);
     return true;
@@ -3090,72 +3461,9 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     if (activePage === 'dataSection') renderStorageSummary();
   }
 
-  function exportUnifiedData() {
-    const payload = {
-      version:DASHBOARD_VERSION, exportedAt:new Date().toISOString(),
-      st:{ data:normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', [])), notes:Object.values(getNotesMap()), processingStatuses:getStProcessingStatuses() },
-      qimai:{ snapshots:getQimaiSnapshots() }, diandian:{ snapshots:getDiandianSnapshots() }, syncLogs:getSyncLogs()
-    };
-    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }), `aso-data-center-backup-${new Date().toISOString().slice(0,10)}.json`);
-  }
-
-  function importUnifiedData(file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(reader.result);
-        if (parsed.st?.data) mergeIncomingData(parsed.st.data);
-        else if (Array.isArray(parsed.data)) mergeIncomingData(parsed.data);
-        if (parsed.st?.notes) mergeIncomingNotes(parsed.st.notes);
-        else if (Array.isArray(parsed.notes)) mergeIncomingNotes(parsed.notes);
-        if (Array.isArray(parsed.st?.processingStatuses)) saveStProcessingStatuses([...getStProcessingStatuses(), ...parsed.st.processingStatuses]);
-        if (parsed.qimai?.snapshots || parsed.qimaiState) mergeQimaiPayload(parsed.qimai || parsed, 'import');
-        if (parsed.diandian?.snapshots || parsed.diandianState) mergeDiandianPayload(parsed.diandian || parsed, 'import');
-        if (Array.isArray(parsed.syncLogs)) localStorage.setItem(SYNC_LOG_KEY, JSON.stringify([...parsed.syncLogs, ...getSyncLogs()].slice(0,200)));
-        renderDashboard(); renderIosDashboard(); renderDiandianDashboard(); renderCrossValidation(); renderOverview(); renderStorageSummary();
-        alert('统一备份导入完成，原数据未删除。');
-      } catch (error) { alert(`导入失败：${error.message}`); }
-    };
-    reader.readAsText(file);
-  }
-
-  function importQimaiFile(file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(reader.result);
-        const count = mergeQimaiPayload(parsed, 'import');
-        renderIosDashboard(); renderOverview(); renderStorageSummary();
-        alert(`已合并 ${count} 个七麦快照。`);
-      } catch (error) { alert(`七麦数据导入失败：${error.message}`); }
-    };
-    reader.readAsText(file);
-  }
-
-  async function exportIosExcel() {
-    if (!window.ExcelJS) return alert('ExcelJS 尚未加载，请检查网络后重试。');
-    const snapshots = getQimaiSnapshots();
-    if (!snapshots.length) return alert('暂无 iOS 七麦数据。');
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'ASO 数据中心';
-    const categories = [
-      ['相关词_排名变动','rank_changed'], ['相关词_新进榜','new_entry']
-    ];
-    categories.forEach(([sheetName, category]) => {
-      const sheet = workbook.addWorksheet(sheetName, { views:[{state:'frozen',ySplit:1}] });
-      sheet.columns = [
-        {header:'日期',key:'date',width:13},{header:'App',key:'app',width:24},{header:'App Store ID',key:'appStoreId',width:15},{header:'批次',key:'batch',width:18},{header:'国家',key:'country',width:9},
-        {header:'关键词',key:'keyword',width:28},{header:'来源词',key:'sourceKeywords',width:30},{header:'排名',key:'rank',width:10},{header:'排名变动',key:'rankChangeText',width:13},
-        {header:'指数',key:'index',width:11},{header:'结果数',key:'resultCount',width:13},{header:'流行度',key:'popularity',width:11},{header:'首次发现',key:'firstSeenDate',width:13},{header:'出现天数',key:'occurrenceDays',width:11},{header:'最佳排名',key:'bestRank',width:11}
-      ];
-      const rows = dedupeQimaiRows(snapshots, category).sort((a,b)=>(b.resultCount??-Infinity)-(a.resultCount??-Infinity));
-      rows.forEach(row => { const stats=getQimaiTimelineStats(snapshots,row); sheet.addRow({...row,sourceKeywords:row.sourceKeywords.join(', '),firstSeenDate:stats.firstSeenDate,occurrenceDays:stats.occurrenceDays,bestRank:stats.bestRank}); });
-      const header=sheet.getRow(1); header.font={bold:true,color:{argb:'FFFFFFFF'}}; header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF4299E1'}}; header.alignment={vertical:'middle',horizontal:'center'};
-      sheet.autoFilter={from:'A1',to:'O1'};
-    });
-    const buffer = await workbook.xlsx.writeBuffer();
-    downloadBlob(new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `iOS七麦关键词追踪_${new Date().toISOString().slice(0,10)}.xlsx`);
-  }
+  // v2.3.24：数据管理的「导入与导出」面板已移除，统一备份导出 / 导入与七麦历史导入
+  // 这几个函数不再有任何调用入口，因此一并删除。
+  // ST / 七麦 / 点点 / 交叉验证页面的 Excel 导出（exportExcelReport、exportCrossValidationExcel）保持原样。
 
   function renderStorageSummary() {
     const st = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
@@ -3872,12 +4180,6 @@ function initDiandianEvents() {
     document.getElementById('drawerCloseBtn').addEventListener('click', closeKeywordDrawer);
     document.getElementById('keywordDrawerMask').addEventListener('click', event => { if (event.target.id === 'keywordDrawerMask') closeKeywordDrawer(); });
     document.addEventListener('keydown', event => { if (event.key === 'Escape') closeKeywordDrawer(); });
-    document.getElementById('exportUnifiedBtn').addEventListener('click', exportUnifiedData);
-    document.getElementById('exportIosExcelBtn').addEventListener('click', exportIosExcel);
-    document.getElementById('importUnifiedBtn').addEventListener('click', () => document.getElementById('importUnifiedFile').click());
-    document.getElementById('importQimaiBtn').addEventListener('click', () => document.getElementById('importQimaiFile').click());
-    document.getElementById('importUnifiedFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importUnifiedData(file); event.target.value=''; });
-    document.getElementById('importQimaiFile').addEventListener('change', event => { const file=event.target.files?.[0]; if(file) importQimaiFile(file); event.target.value=''; });
     document.getElementById('stKeywordStatusBtn')?.addEventListener('click', () => {
       renderStKeywordGuardPanel();
       const output = document.getElementById('stKeywordGuardOutput');
@@ -3901,6 +4203,13 @@ function initDiandianEvents() {
       moveStorageKeyToTrash('sync_logs', SYNC_LOG_KEY, '同步日志');
       renderOverview(); renderStorageSummary(); renderTrashPanel();
     });
+    // 回收站操作（v2.3.24）：面板每次重渲染后由 bindTrashPanelEvents 重新绑定卡片按钮。
+    document.getElementById('trashRefreshBtn')?.addEventListener('click', () => {
+      cleanupTrash();
+      renderTrashPanel();
+    });
+    document.getElementById('trashRestoreAllBtn')?.addEventListener('click', restoreAllTrash);
+    document.getElementById('trashClearAllBtn')?.addEventListener('click', clearTrashAll);
   }
 
 
@@ -4128,16 +4437,13 @@ function initDiandianEvents() {
     );
 
     if (!dryRun && removedRecords.length) {
-      const parsedTrash = safeJsonParse(localStorage.getItem('aso_st_trash_v1') || '[]', []);
-      const stTrash = Array.isArray(parsedTrash) ? parsedTrash : [];
-      stTrash.push({
+      mirrorStTrashEntry({
         type:'st_keyword_guard',
         app: filterApp || (detail.length === 1 ? detail[0].app : '关键词清单护栏'),
         label:'ST 关键词清单护栏清理',
         records: removedRecords,
         deletedAt: Date.now()
       });
-      localStorage.setItem('aso_st_trash_v1', JSON.stringify(stTrash));
       saveMasterData(kept);
     }
 
@@ -4215,7 +4521,8 @@ function initDiandianEvents() {
     document.getElementById('excelAllBtn').addEventListener('click', () => {
       exportExcelReport(getAllRecords(), '全部数据', document.getElementById('excelAllBtn'));
     });
-    document.getElementById('deleteCurrentAppBtn')?.addEventListener('click',()=>{ if(selectedApps.length) deleteAppTracking(selectedApps[0]); else alert('请先选择 App'); });
+    // 删除当前 App 数据（唯一实现，deleteAppTracking 也委托到这里）
+    document.getElementById('deleteAppBtn')?.addEventListener('click', () => deleteSelectedAppData());
     const stNodeIntervalSelect = document.getElementById('stNodeIntervalSelect');
     if (stNodeIntervalSelect) {
       stNodeIntervalSelect.value = String(stNodeIntervalDays);
@@ -4225,34 +4532,6 @@ function initDiandianEvents() {
         renderDashboard();
       });
     }
-
-    document.getElementById('deleteAppBtn')?.addEventListener('click', () => {
-      const currentApp = document.getElementById('appSelect')?.value;
-      if (!currentApp || currentApp === 'all') {
-        alert('请先选择具体 App。');
-        return;
-      }
-      const allData = JSON.parse(localStorage.getItem(MASTER_KEY) || '[]');
-      const removed = allData.filter(item => item.App === currentApp || item.app === currentApp);
-      if (!removed.length) {
-        alert('未找到该 App 数据。');
-        return;
-      }
-      if (!confirm(`确定删除当前 App 数据？\n\nApp：${currentApp}\n数据量：${removed.length} 条\n\n将移动到临时回收区。`)) return;
-      // 统一进入回收站（使用 aso_deleted_tracking_trash_v1）
-      // 避免旧版 aso_trash_data 与数据管理回收站分离
-      moveToTrashRecord({
-        type:'st_app',
-        app: currentApp,
-        records: removed,
-        deletedAt: Date.now()
-      });
-      const remain = allData.filter(item => !(item.App === currentApp || item.app === currentApp));
-      saveMasterData(remain);
-      renderDashboard();
-      renderOverview();
-      renderStorageSummary();
-    });
   });
 
   window.addEventListener('resize', () => {
