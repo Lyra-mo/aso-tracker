@@ -228,9 +228,11 @@
         <div class="panel" style="margin-top:16px;">
           <div class="panel-title"><h3>关键词清单护栏（Sensor Tower）</h3></div>
           <div class="hint">只有已登记关键词清单内的 ST 排名记录才会写入主表：清单外的关键词会被拒绝并记录在下方；其他 App 的行即使贴上本 App/批次标签也不会进入看板。未登记清单的 App + 批次不受影响，仍按原样接收。</div>
+          <div class="hint">「清理异常关键词」用于清除旧版插件误写入的脏数据（关键词栏是「↑ 118.2% / ↓ 34.8%」这类排名变动值），与是否登记清单无关，正常关键词不受影响。</div>
           <div class="data-actions">
             <button id="stKeywordStatusBtn" class="action-btn primary">刷新清单状态</button>
             <button id="stKeywordPruneBtn" class="action-btn danger">清理清单外关键词</button>
+            <button id="stInvalidKeywordPruneBtn" class="action-btn danger">清理异常关键词</button>
           </div>
           <div id="stKeywordGuardPanel" class="hint">尚未加载关键词清单状态。</div>
           <pre id="stKeywordGuardOutput" class="hint" style="white-space:pre-wrap; word-break:break-all; margin-top:10px;"></pre>

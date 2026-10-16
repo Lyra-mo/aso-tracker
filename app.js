@@ -15,7 +15,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.3.24';
+  const DASHBOARD_VERSION = '2.3.25';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
   // 关键词清单护栏（v2.3.23）：只接收任务自身关键词清单内的 ST 行。
   const ST_KEYWORD_WHITELIST_KEY = 'aso_st_keyword_whitelist_v1';
@@ -728,6 +728,19 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     return list;
   }
 
+  // v2.3.25：脏数据识别。旧版插件在 DOM 抓取路径曾把页面上的“排名变动”单元格
+  // （↑ 118.2% / ↓ 34.8% / 694.7%）当成关键词写入，这类值不可能是 ASO 追踪关键词。
+  // 注意：只拦“变动箭头 / 纯百分比”这类明显异常值，像 2048 这种纯数字关键词仍然保留。
+  function isInvalidStKeyword(value) {
+    const keyword = stKeywordNormalize(value);
+    if (!keyword) return true;
+    if (/[↑↓⇧⇩△▽▲▼]/.test(keyword)) return true;
+    if (/^[+\-]?\d+(?:[.,]\d+)?\s*%$/.test(keyword)) return true;
+    if (keyword.includes('%') && !/\p{L}/u.test(keyword)) return true;
+    return false;
+  }
+  window.__ASO_IS_INVALID_ST_KEYWORD = isInvalidStKeyword;
+
   function stKeywordScopeKey(app, batch, country) {
     return `${stKeywordNormalize(app)}__${stKeywordNormalize(batch)}__${String(country == null ? '' : country).trim().toUpperCase()}`;
   }
@@ -847,6 +860,21 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     incoming.forEach(item => {
       const scope = stKeywordRowScope(item);
       const cacheKey = stKeywordScopeKey(scope.app, scope.batch, scope.country);
+      const keyword = stKeywordNormalize(item.Keyword || item.keyword);
+      // v2.3.25：明显异常的关键词（排名变动箭头 / 纯百分比）直接拒绝，与是否登记清单无关。
+      if (isInvalidStKeyword(keyword)) {
+        rejected.push({
+          at,
+          app: scope.app,
+          batch: scope.batch,
+          country: scope.country,
+          keyword,
+          rank: item.Rank ?? item.rank ?? '',
+          date: item.Date || item.date || '',
+          reason: 'invalid_keyword'
+        });
+        return;
+      }
       if (!allowedCache.has(cacheKey)) {
         const entry = findStKeywordEntry(store, scope.app, scope.batch, scope.country);
         const allowed = entry ? stKeywordEntryAllowedSet(entry) : null;
@@ -855,7 +883,6 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       }
       const allowed = allowedCache.get(cacheKey);
       if (!allowed) { kept.push(item); return; }
-      const keyword = stKeywordNormalize(item.Keyword || item.keyword);
       if (allowed.has(keyword.toLowerCase())) { kept.push(item); return; }
       rejected.push({
         at,
@@ -3502,7 +3529,13 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
       box.innerHTML = `<div class="hint">读取关键词清单状态失败：${escapeHtml(error.message || String(error))}</div>`;
       return;
     }
-    const header = `<div class="summary-line"><span class="version-badge">已登记清单 ${status.lists.length} 个</span><span class="version-badge">覆盖组合 ${status.whitelistKeys} 个</span><span class="version-badge">累计拒绝 ${status.rejected} 条</span></div>`;
+    const invalidInfo = (() => {
+      try { return window.ASO_COUNT_ST_INVALID_KEYWORDS(); } catch (_) { return { count:0, keywords:[], keywordCount:0 }; }
+    })();
+    const header = `<div class="summary-line"><span class="version-badge">已登记清单 ${status.lists.length} 个</span><span class="version-badge">覆盖组合 ${status.whitelistKeys} 个</span><span class="version-badge">累计拒绝 ${status.rejected} 条</span><span class="version-badge"${invalidInfo.count ? ' style="background:#fee2e2;color:#b91c1c;"' : ''}>异常关键词 ${invalidInfo.count} 条</span></div>`;
+    const invalidHint = invalidInfo.count
+      ? `<div class="hint">检测到 ${invalidInfo.count} 条异常关键词（${invalidInfo.keywordCount} 个，如：${escapeHtml(invalidInfo.keywords.slice(0, 6).join('、'))}），这些是旧版插件把页面“排名变动/百分比”当成关键词写入的脏数据，可点上方「清理异常关键词」一键移除。</div>`
+      : '';
     const listHtml = status.lists.length
       ? status.lists.map(item => {
           const preview = item.keywords.slice(0, 8).map(escapeHtml).join('、') + (item.keywords.length > 8 ? ' …' : '');
@@ -3512,7 +3545,28 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const rejectedHtml = status.rejectedLatest.length
       ? `<div class="table-wrap"><table class="overview-status-table"><thead><tr><th>App</th><th>批次</th><th>国家</th><th>关键词</th><th>数据日期</th><th>拒绝时间</th></tr></thead><tbody>${status.rejectedLatest.map(item => `<tr><td>${escapeHtml(item.app)}</td><td>${escapeHtml(item.batch)}</td><td>${escapeHtml(item.country || '—')}</td><td>${escapeHtml(item.keyword)}</td><td>${escapeHtml(item.date || '—')}</td><td>${escapeHtml(item.at || '')}</td></tr>`).join('')}</tbody></table></div>`
       : '<div class="hint">暂无被拒绝的关键词记录。</div>';
-    box.innerHTML = `${header}<div class="selector-title">已登记清单</div>${listHtml}<div class="selector-title">最近拒绝记录（最多 20 条）</div>${rejectedHtml}`;
+    box.innerHTML = `${header}${invalidHint}<div class="selector-title">已登记清单</div>${listHtml}<div class="selector-title">最近拒绝记录（最多 20 条）</div>${rejectedHtml}`;
+  }
+
+  // v2.3.25：一键清理“排名变动/百分比”这类异常关键词行。
+  function runStInvalidKeywordPruneTool() {
+    const output = document.getElementById('stKeywordGuardOutput');
+    const write = text => { if (output) output.textContent = text; };
+    try {
+      const preview = window.ASO_PRUNE_ST_INVALID_KEYWORDS({ dryRun:true });
+      const breakdown = (preview.detail || []).map(item => `· ${item.keyword}（${item.app}｜${item.batch}）× ${item.count}`).join('\n');
+      write(`预检（未修改数据）：扫描 ${preview.scanned} 条，发现异常关键词记录 ${preview.removed} 条。\n${breakdown || '（无）'}`);
+      if (!preview.removed) { alert('没有发现异常关键词记录。'); return; }
+      if (!confirm(`确定清理 ${preview.removed} 条异常关键词记录吗？（排名变动箭头 / 纯百分比）\n\n${breakdown}\n\n记录会移入回收站，可随时恢复；正常关键词不受影响。`)) return;
+      const result = window.ASO_PRUNE_ST_INVALID_KEYWORDS({ dryRun:false });
+      addSyncLog({ source:'sensortower', status:'warning', message:`异常关键词清理：移除 ${result.removed} 条（排名变动/百分比）。` });
+      renderStKeywordGuardPanel();
+      renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
+      write(`已清理 ${result.removed} 条异常关键词记录（扫描 ${result.scanned} 条），可在“回收站”恢复。\n${breakdown || '（无）'}`);
+    } catch (error) {
+      write(`清理失败：${error.message || String(error)}`);
+      alert(`清理失败：${error.message || String(error)}`);
+    }
   }
 
   function stKeywordPruneDetailText(detail) {
@@ -4186,6 +4240,7 @@ function initDiandianEvents() {
       if (output) output.textContent = '已刷新关键词清单状态。';
     });
     document.getElementById('stKeywordPruneBtn')?.addEventListener('click', runStKeywordPruneTool);
+    document.getElementById('stInvalidKeywordPruneBtn')?.addEventListener('click', runStInvalidKeywordPruneTool);
     document.getElementById('clearStBtn')?.addEventListener('click', () => {
       if(!confirm('确定清空全部 Sensor Tower 数据吗？数据将进入回收站。')) return;
       moveStorageKeyToTrash('st_storage', MASTER_KEY, 'Sensor Tower 数据');
@@ -4448,6 +4503,58 @@ function initDiandianEvents() {
     }
 
     return { ok:true, removed: removedRecords.length, scanned, dryRun, detail };
+  };
+
+  // v2.3.25：清理主表里明显异常的关键词行（排名变动箭头 / 纯百分比），与关键词清单是否登记无关。
+  window.ASO_PRUNE_ST_INVALID_KEYWORDS = function(options = {}) {
+    const filterApp = String(options.app || '').trim();
+    const filterBatch = String(options.batch || '').trim();
+    const dryRun = options.dryRun === true;
+    const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const kept = [];
+    const removedRecords = [];
+    const detailMap = new Map();
+    let scanned = 0;
+
+    records.forEach(item => {
+      const app = String(item.App || '').trim();
+      const batch = String(item.Batch || item.batchName || '').trim();
+      if ((filterApp && app !== filterApp) || (filterBatch && batch !== filterBatch)) {
+        kept.push(item);
+        return;
+      }
+      scanned += 1;
+      const keyword = stKeywordNormalize(item.Keyword);
+      if (!isInvalidStKeyword(keyword)) { kept.push(item); return; }
+      removedRecords.push(item);
+      const detailKey = [app, batch, keyword].join('|');
+      const detail = detailMap.get(detailKey) || { app, batch, keyword, count:0 };
+      detail.count += 1;
+      detailMap.set(detailKey, detail);
+    });
+
+    const detail = [...detailMap.values()].sort((a, b) => b.count - a.count || String(a.keyword).localeCompare(String(b.keyword)));
+    if (!dryRun && removedRecords.length) {
+      mirrorStTrashEntry({
+        type:'st_invalid_keyword',
+        app: filterApp || (detail.length === 1 ? detail[0].app : '异常关键词'),
+        label:'ST 异常关键词清理（排名变动/百分比）',
+        keywords: [...new Set(removedRecords.map(item => stKeywordNormalize(item.Keyword)))],
+        records: removedRecords,
+        deletedAt: Date.now()
+      });
+      saveMasterData(kept);
+    }
+
+    return { ok:true, removed: removedRecords.length, scanned, dryRun, detail };
+  };
+
+  // 只统计数量，供面板显示。
+  window.ASO_COUNT_ST_INVALID_KEYWORDS = function() {
+    const records = normalizeRecords(safeJsonParse(localStorage.getItem(MASTER_KEY) || '[]', []));
+    const invalid = records.filter(item => isInvalidStKeyword(item.Keyword));
+    const keywords = [...new Set(invalid.map(item => stKeywordNormalize(item.Keyword)))];
+    return { ok:true, count:invalid.length, keywords:keywords.slice(0, 20), keywordCount:keywords.length };
   };
 
   function initStFilterEvents() {
