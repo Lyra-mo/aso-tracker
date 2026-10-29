@@ -75,6 +75,7 @@
             <button id="deleteAppBtn" class="clear-btn">删除当前 App 数据</button>
             <button id="stClearSelectionBtn" class="action-btn">清除勾选</button>
             <button id="stDeleteSelectedBtn" class="action-btn danger">删除选中关键词</button>
+            <button id="clearStBtn" class="clear-btn">清空全部 ST 数据</button>
             <span class="hint" id="stSelectionNote">已勾选 0 个关键词</span>
           </div>
           <div class="selector-title">App 筛选</div>
@@ -116,6 +117,7 @@
           <div class="ios-selection-actions">
             <button id="iosClearSelectionBtn" class="action-btn">清除勾选</button>
             <button id="iosClearCurrentBtn" class="action-btn danger">清空当前筛选数据</button>
+            <button id="clearIosBtn" class="action-btn danger">清空全部七麦数据</button>
             <button id="iosDeleteTaskBtn" class="action-btn danger" disabled>删除当前任务</button>
             <span id="iosSelectionNote" class="ios-selection-note">点击关键词或勾选后，下方折线图会显示跨日期排名趋势。</span>
           </div>
@@ -125,7 +127,7 @@
           <div id="iosOverviewTrendEmpty" class="ios-chart-empty">请点击下方关键词，或勾选 1–8 个关键词。折线图按实际抓取日期展示排名，排名数字越小越好。</div>
           <div id="iosOverviewTrendChart" class="hidden" style="width:100%;height:360px;"></div>
         </div>
-        <div id="iosEmpty" class="empty-box">暂无七麦数据。可从“数据管理”导入插件导出的 14 天历史 JSON；插件同步接入后也会自动进入这里。</div>
+        <div id="iosEmpty" class="empty-box">暂无七麦数据。插件同步后会自动进入这里。</div>
         <div id="iosTableWrap" class="table-wrap hidden">
           <table>
             <thead id="iosTableHead"></thead>
@@ -153,6 +155,7 @@
           <div class="summary-line" id="ddSummaryLine"></div>
           <div class="ios-selection-actions">
             <button id="ddDeleteTaskBtn" class="action-btn danger" disabled>删除当前任务</button>
+            <button id="clearDiandianBtn" class="action-btn danger">清空全部点点数据</button>
             <span class="ios-selection-note">需先选择具体 App、测试批次和国家；删除后该任务全部日期快照会从看板移除。</span>
           </div>
         </div>
@@ -200,9 +203,9 @@
       </section>
 
       <section id="dataSection" class="page-section">
-        <div class="page-heading"><div><h2>数据管理</h2><p>ST、七麦与点点分开存储；删除操作按来源分开并先进入回收站，降低误删风险。</p></div></div>
+        <div class="page-heading"><div><h2>数据管理</h2><p>每个平台的数据清理按钮已放回各自页面；这里只保留存储概览、回收站与同步日志。</p></div></div>
         <div class="panel">
-          <div class="panel-title"><h3>本地数据量</h3></div>
+          <div class="panel-title"><h3>本地数据量</h3><span class="version-badge">点击展开明细</span></div>
           <div id="storageSummary"></div>
         </div>
         <div class="panel" style="margin-top:16px;">
@@ -212,31 +215,27 @@
             <button id="trashRestoreAllBtn" class="action-btn success">恢复全部</button>
             <button id="trashClearAllBtn" class="action-btn danger">清空回收站</button>
           </div>
-          <div class="hint">删除的数据会先移入回收站，保留 30 天、最多 50 条；恢复或永久删除都会同时同步两个回收站存储。清空回收站不可恢复。</div>
+          <div class="hint">删除的数据会先移入回收站，保留 30 天、最多 50 条；清空回收站不可恢复。</div>
           <div id="trashPanel"></div>
         </div>
         <div class="panel" style="margin-top:16px;">
-          <div class="panel-title"><h3>分来源清理</h3></div>
+          <div class="panel-title"><h3>同步日志</h3></div>
           <div class="data-actions">
-            <button id="clearIosBtn" class="action-btn danger">清空 iOS 七麦数据</button>
-            <button id="clearStBtn" class="action-btn danger">清空 Sensor Tower 数据</button>
-            <button id="clearDiandianBtn" class="action-btn danger">清空 iOS 点点数据</button>
             <button id="clearSyncLogsBtn" class="action-btn danger">清空同步日志</button>
           </div>
-          <div class="hint">清理会先把数据移入回收站，可在上方回收站里恢复。</div>
+          <div class="hint">只清空日志，不影响任何排名数据。</div>
         </div>
-        <div class="panel" style="margin-top:16px;">
-          <div class="panel-title"><h3>关键词清单护栏（Sensor Tower）</h3></div>
-          <div class="hint">只有已登记关键词清单内的 ST 排名记录才会写入主表：清单外的关键词会被拒绝并记录在下方；其他 App 的行即使贴上本 App/批次标签也不会进入看板。未登记清单的 App + 批次不受影响，仍按原样接收。</div>
-          <div class="hint">「清理异常关键词」用于清除旧版插件误写入的脏数据（关键词栏是「↑ 118.2% / ↓ 34.8%」这类排名变动值），与是否登记清单无关，正常关键词不受影响。</div>
+        <details class="panel" style="margin-top:16px;">
+          <summary><h3 style="display:inline">ST 关键词护栏（进阶，默认折叠）</h3></summary>
+          <div class="hint">只有已登记清单内的 ST 关键词才会写入主表；清单外的行会被拒绝并记录。未登记清单的 App + 批次仍按原样接收。</div>
           <div class="data-actions">
-            <button id="stKeywordStatusBtn" class="action-btn primary">刷新清单状态</button>
+            <button id="stKeywordStatusBtn" class="action-btn">刷新状态</button>
             <button id="stKeywordPruneBtn" class="action-btn danger">清理清单外关键词</button>
             <button id="stInvalidKeywordPruneBtn" class="action-btn danger">清理异常关键词</button>
           </div>
           <div id="stKeywordGuardPanel" class="hint">尚未加载关键词清单状态。</div>
           <pre id="stKeywordGuardOutput" class="hint" style="white-space:pre-wrap; word-break:break-all; margin-top:10px;"></pre>
-        </div>
+        </details>
       </section>
     </main>
   </div>

@@ -15,7 +15,7 @@
   const IOS_SELECTION_KEY = 'aso_ios_selected_keywords_v210';
   const MAX_IOS_TREND_SERIES = 8;
   const IOS_MIN_INDEX = 4605;
-  const DASHBOARD_VERSION = '2.3.25';
+  const DASHBOARD_VERSION = '2.3.26';
   const TRASH_KEY = 'aso_deleted_tracking_trash_v1';
   // 关键词清单护栏（v2.3.23）：只接收任务自身关键词清单内的 ST 行。
   const ST_KEYWORD_WHITELIST_KEY = 'aso_st_keyword_whitelist_v1';
@@ -271,7 +271,20 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const mainTrash = safeJsonParse(localStorage.getItem(TRASH_KEY) || '[]', []);
     // 合并 ST 专用回收记录，兼容旧版本删除链路；_trashSource 仅用于展示来源。
     const stTrash = getStTrashRecords().map(item => ({ ...item, _trashSource: 'st' }));
-    return [...mainTrash, ...stTrash];
+    // v2.3.26：同一次删除会同时写入主回收站与 ST 镜像，合并展示时必须去重，
+    // 否则回收站里会出现两条一模一样的「ST·关键词」记录。
+    const seen = new Set();
+    const merged = [];
+    [...mainTrash, ...stTrash].forEach(entry => {
+      if (!entry) return;
+      const signature = entry._trashId
+        ? `id:${entry._trashId}`
+        : `ts:${Number(entry.deletedAt || 0)}|${entry.type || ''}|${entry.key || entry.app || entry.label || ''}`;
+      if (seen.has(signature)) return;
+      seen.add(signature);
+      merged.push(entry);
+    });
+    return merged;
   }
   function saveTrashRecords(list) {
     localStorage.setItem(TRASH_KEY, JSON.stringify(list || []));
@@ -3503,18 +3516,31 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const logs = getSyncLogs();
     const stStatuses = getStProcessingStatuses();
     const noDataCount = stStatuses.filter(item=>item.status==='completed_no_data').length;
-    const rows = [
-      ['Sensor Tower', `${st.length.toLocaleString()} 条原始排名记录`, MASTER_KEY],
-      ['ST 处理状态', `${stStatuses.length.toLocaleString()} 个日期状态｜无排名 ${noDataCount}`, ST_STATUS_KEY],
-      ['iOS 七麦快照', `${snapshots.length.toLocaleString()} 个日期快照`, QIMAI_KEY],
-      ['iOS 排名变动', `${changedCount.toLocaleString()} 条跨日期去重记录`, 'rank_changed'],
-      ['iOS 新进榜', `${newCount.toLocaleString()} 条跨日期去重记录`, 'new_entry'],
-      ['iOS 点点快照', `${ddSnapshots.length.toLocaleString()} 个日期快照`, DIANDIAN_KEY],
-      ['点点排名变动', `${ddChangedCount.toLocaleString()} 条跨日期去重记录`, 'diandian_rank_changed'],
-      ['点点新进榜', `${ddNewCount.toLocaleString()} 条跨日期去重记录`, 'diandian_new_entry'],
+
+    // v2.3.26：默认只显示一行总量，明细收进 details，避免数据管理页被九行存储键撑长。
+    const badges = [
+      ['Sensor Tower', `${st.length.toLocaleString()} 条排名`],
+      ['七麦', `${snapshots.length.toLocaleString()} 个日期快照`],
+      ['点点', `${ddSnapshots.length.toLocaleString()} 个日期快照`],
+      ['同步日志', `${logs.length.toLocaleString()} 条`]
+    ].map(([name, value]) => `<span class="version-badge">${escapeHtml(name)} ${escapeHtml(value)}</span>`).join('');
+
+    const detailRows = [
+      ['Sensor Tower 排名记录', `${st.length.toLocaleString()} 条`, MASTER_KEY],
+      ['ST 日期状态', `${stStatuses.length.toLocaleString()}（无排名 ${noDataCount}）`, ST_STATUS_KEY],
+      ['七麦快照', `${snapshots.length.toLocaleString()} 个`, QIMAI_KEY],
+      ['七麦去重记录', `排名变动 ${changedCount.toLocaleString()}｜新进榜 ${newCount.toLocaleString()}`, 'rank_changed / new_entry'],
+      ['点点快照', `${ddSnapshots.length.toLocaleString()} 个`, DIANDIAN_KEY],
+      ['点点去重记录', `排名变动 ${ddChangedCount.toLocaleString()}｜新进榜 ${ddNewCount.toLocaleString()}`, 'diandian_rank_changed / new_entry'],
       ['同步日志', `${logs.length.toLocaleString()} 条`, SYNC_LOG_KEY]
     ];
-    document.getElementById('storageSummary').innerHTML = rows.map(([name,note,key]) => `<div class="storage-row"><div class="storage-key">${name}</div><div class="storage-note">${note}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('');
+
+    document.getElementById('storageSummary').innerHTML = `
+      <div class="summary-line">${badges}</div>
+      <details class="storage-details">
+        <summary class="hint" style="cursor:pointer">展开存储明细（含存储键）</summary>
+        ${detailRows.map(([name, note, key]) => `<div class="storage-row"><div class="storage-key">${escapeHtml(name)}</div><div class="storage-note">${escapeHtml(note)}</div><span class="version-badge">${escapeHtml(key)}</span></div>`).join('')}
+      </details>`;
     renderStKeywordGuardPanel();
   }
 
@@ -3532,9 +3558,9 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const invalidInfo = (() => {
       try { return window.ASO_COUNT_ST_INVALID_KEYWORDS(); } catch (_) { return { count:0, keywords:[], keywordCount:0 }; }
     })();
-    const header = `<div class="summary-line"><span class="version-badge">已登记清单 ${status.lists.length} 个</span><span class="version-badge">覆盖组合 ${status.whitelistKeys} 个</span><span class="version-badge">累计拒绝 ${status.rejected} 条</span><span class="version-badge"${invalidInfo.count ? ' style="background:#fee2e2;color:#b91c1c;"' : ''}>异常关键词 ${invalidInfo.count} 条</span></div>`;
+    const header = `<div class="summary-line"><span class="version-badge">已登记清单 ${status.lists.length} 个</span><span class="version-badge">累计拒绝 ${status.rejected} 条</span><span class="version-badge"${invalidInfo.count ? ' style="background:#fee2e2;color:#b91c1c;"' : ''}>异常关键词 ${invalidInfo.count} 条</span></div>`;
     const invalidHint = invalidInfo.count
-      ? `<div class="hint">检测到 ${invalidInfo.count} 条异常关键词（${invalidInfo.keywordCount} 个，如：${escapeHtml(invalidInfo.keywords.slice(0, 6).join('、'))}），这些是旧版插件把页面“排名变动/百分比”当成关键词写入的脏数据，可点上方「清理异常关键词」一键移除。</div>`
+      ? `<div class="hint">检测到 ${invalidInfo.count} 条异常关键词（${invalidInfo.keywordCount} 个，如：${escapeHtml(invalidInfo.keywords.slice(0, 6).join('、'))}），可点上方「清理异常关键词」一键移除。</div>`
       : '';
     const listHtml = status.lists.length
       ? status.lists.map(item => {
@@ -3545,7 +3571,8 @@ const chart = window.echarts ? echarts.init(document.getElementById('chartContai
     const rejectedHtml = status.rejectedLatest.length
       ? `<div class="table-wrap"><table class="overview-status-table"><thead><tr><th>App</th><th>批次</th><th>国家</th><th>关键词</th><th>数据日期</th><th>拒绝时间</th></tr></thead><tbody>${status.rejectedLatest.map(item => `<tr><td>${escapeHtml(item.app)}</td><td>${escapeHtml(item.batch)}</td><td>${escapeHtml(item.country || '—')}</td><td>${escapeHtml(item.keyword)}</td><td>${escapeHtml(item.date || '—')}</td><td>${escapeHtml(item.at || '')}</td></tr>`).join('')}</tbody></table></div>`
       : '<div class="hint">暂无被拒绝的关键词记录。</div>';
-    box.innerHTML = `${header}${invalidHint}<div class="selector-title">已登记清单</div>${listHtml}<div class="selector-title">最近拒绝记录（最多 20 条）</div>${rejectedHtml}`;
+    // v2.3.26：明细收进 details，面板默认只显示一行统计。
+    box.innerHTML = `${header}${invalidHint}<details class="storage-details"><summary class="hint" style="cursor:pointer">展开已登记清单与拒绝记录</summary><div class="selector-title">已登记清单</div>${listHtml}<div class="selector-title">最近拒绝记录（最多 20 条）</div>${rejectedHtml}</details>`;
   }
 
   // v2.3.25：一键清理“排名变动/百分比”这类异常关键词行。
@@ -4247,13 +4274,13 @@ function initDiandianEvents() {
       renderDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
       alert('已移入回收站');
     });
-    document.getElementById('clearIosBtn').addEventListener('click', () => {
+    document.getElementById('clearIosBtn')?.addEventListener('click', () => {
       if(!confirm('确定清空全部 iOS 七麦快照吗？数据将进入回收站。'))return;
       moveStorageKeyToTrash('qimai_storage', QIMAI_KEY, 'iOS 七麦快照');
       selectedIosKeywords.clear(); saveIosSelection();
       renderIosDashboard(); renderOverview(); renderStorageSummary(); renderTrashPanel();
     });
-    document.getElementById('clearSyncLogsBtn').addEventListener('click', () => {
+    document.getElementById('clearSyncLogsBtn')?.addEventListener('click', () => {
       if(!confirm('确定清空同步日志吗？数据将进入回收站。'))return;
       moveStorageKeyToTrash('sync_logs', SYNC_LOG_KEY, '同步日志');
       renderOverview(); renderStorageSummary(); renderTrashPanel();
